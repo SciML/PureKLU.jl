@@ -16,17 +16,36 @@ import KLU
 
 const SUITESPARSE = KLU
 
+# `USE_FMA` is the FMA mode that makes PureKLU bit-match the
+# `SuiteSparse_jll` `libklu` binary on the current platform's
+# architecture:
+#   - x86_64 ({linux,windows,darwin}): BinaryBuilder SSE2-only baseline,
+#     no FMA emission -> `use_fma=false`.
+#   - aarch64 (darwin, linux): ARMv8 baseline includes FMA -> `use_fma=true`
+#     (verified by `otool -tv libklu.dylib` showing `fmsub` in hot loops).
+# Real-Float64 testsets thread `use_fma=USE_FMA` so bit-equality holds on
+# every platform.
+#
+# `STRICT_FP` gates the *complex* tests' bit-equality check. Complex
+# bit-equality requires both the FMA mode to match and PureKLU's
+# `_cdiv`/`_ssabs` to mirror SuiteSparse exactly -- only x86_64-linux is
+# known-good. Elsewhere, complex tests fall back to `isapprox`.
+const USE_FMA = Sys.ARCH === :aarch64
+const STRICT_FP = Sys.islinux() && Sys.ARCH === :x86_64
+strict_eq(a, b) = STRICT_FP ? a == b : isapprox(a, b)
+
 """
     compare_strict(A)
 
 Strict equality: BTF, permutations, scaling, factor pattern and the
-solve all match bit-for-bit. PureKLU is invoked with `use_fma=false`
-so its multiply-subtract loops emit the same separate `mulsd`/`subsd`
-sequence as SuiteSparse's SSE2-baseline `libklu.so`.
+solve all match bit-for-bit. PureKLU is invoked with `use_fma=USE_FMA`,
+which selects the FMA mode matching `libklu`'s code generation on the
+current platform (`false` on SSE2-only x86_64 builds, `true` on ARMv8
+where the baseline emits `fmsub`).
 """
 function compare_strict(A::SparseMatrixCSC{Float64})
     K_ref = SUITESPARSE.klu(A)
-    K_pj  = PureKLU.klu(A; use_fma=false)
+    K_pj  = PureKLU.klu(A; use_fma=USE_FMA)
 
     @test K_ref.nblocks == K_pj.nblocks
     @test K_ref.lnz == K_pj.lnz
@@ -65,7 +84,7 @@ still require:
 """
 function compare_loose(A::SparseMatrixCSC{Float64})
     K_ref = SUITESPARSE.klu(A)
-    K_pj  = PureKLU.klu(A; use_fma=false)
+    K_pj  = PureKLU.klu(A; use_fma=USE_FMA)
 
     @test K_ref.nblocks == K_pj.nblocks
     @test K_ref.R == K_pj.R
@@ -120,7 +139,7 @@ end
     A = sparse(Ap, Ai, Ax1)
     B = sparse(Ap, Ai, Ax2)
     K_ref = SUITESPARSE.klu(A); SUITESPARSE.klu!(K_ref, B)
-    K_pj  = PureKLU.klu(A; use_fma=false); PureKLU.klu!(K_pj, B)
+    K_pj  = PureKLU.klu(A; use_fma=USE_FMA); PureKLU.klu!(K_pj, B)
     @test K_ref.L == K_pj.L
     @test K_ref.U == K_pj.U
     @test K_ref.F == K_pj.F
@@ -176,11 +195,11 @@ end
     @test K_ref.p == K_pj.p
     @test K_ref.q == K_pj.q
     @test K_ref.R == K_pj.R
-    @test K_ref.L == K_pj.L
-    @test K_ref.U == K_pj.U
-    @test K_ref.F == K_pj.F
+    @test strict_eq(K_ref.L, K_pj.L)
+    @test strict_eq(K_ref.U, K_pj.U)
+    @test strict_eq(K_ref.F, K_pj.F)
     b = ComplexF64[1.0, 2.0im, -1.0+3.0im]
-    @test K_ref \ b == K_pj \ b
+    @test strict_eq(K_ref \ b, K_pj \ b)
 end
 
 @testset "PureKLU vs KLU.jl: identity-like matrices (strict)" begin
@@ -237,10 +256,10 @@ end
         @test K_ref.q == K_pj.q
         @test K_ref.R == K_pj.R
         @test K_ref.Rs == K_pj.Rs
-        @test K_ref.L == K_pj.L
-        @test K_ref.U == K_pj.U
-        @test K_ref.F == K_pj.F
+        @test strict_eq(K_ref.L, K_pj.L)
+        @test strict_eq(K_ref.U, K_pj.U)
+        @test strict_eq(K_ref.F, K_pj.F)
         b = randn(rng, ComplexF64, n)
-        @test K_ref \ b == K_pj \ b
+        @test strict_eq(K_ref \ b, K_pj \ b)
     end
 end

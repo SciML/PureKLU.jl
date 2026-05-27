@@ -19,6 +19,11 @@ using Random
 import KLU
 import AMD as SuiteSparseAMD
 
+# See `test_compare_klu.jl` for the rationale behind `STRICT_FP` / `USE_FMA`.
+const USE_FMA = Sys.ARCH === :aarch64
+const STRICT_FP = Sys.islinux() && Sys.ARCH === :x86_64
+strict_eq(a, b) = STRICT_FP ? a == b : isapprox(a, b)
+
 # Pull the not-exported BTF/AMD modules so we can hit the internals.
 const PKBTF = PureKLU.BTF
 const PKAMD = PureKLU.AMD
@@ -59,7 +64,7 @@ end
 Same fields, read from PureKLU's symbolic struct.
 """
 function pureklu_internal_btf(A::SparseMatrixCSC)
-    F = PureKLU.klu(A; use_fma=false)
+    F = PureKLU.klu(A; use_fma=USE_FMA)
     Sym = getfield(F, :symbolic)
     return Int.(Sym.P), Int.(Sym.Q), Int.(Sym.R[1:Int(Sym.nblocks)+1]),
            Int(Sym.structural_rank), Int(Sym.nblocks),
@@ -108,7 +113,7 @@ end
     # KLU.jl doesn't expose full_factor; build factorisation objects and run
     # analyze only.
     F_ref = KLU.KLUFactorization(A); KLU.klu_analyze!(F_ref)
-    F_pj  = PureKLU.KLUFactorization(A); F_pj.common.use_fma = Val(false)
+    F_pj  = PureKLU.KLUFactorization(A); F_pj.common.use_fma = Val(USE_FMA)
     PureKLU.klu_analyze!(F_pj)
     Sym_ref = F_ref.symbolic
     Sym_pj  = getfield(F_pj, :symbolic)
@@ -177,7 +182,7 @@ end
         A = sprand(n, n, 0.2) + n*I
         # configure both with the same scale mode
         K_ref = KLU.klu(A; check=false)
-        K_pj  = PureKLU.klu(A; check=false, use_fma=false)
+        K_pj  = PureKLU.klu(A; check=false, use_fma=USE_FMA)
         K_ref.common.scale = Int32(scale)
         K_pj.common.scale  = Int32(scale)
         KLU.klu_factor!(K_ref)
@@ -198,7 +203,7 @@ end
     ]
     for A in test_cases
         K_ref = KLU.klu(A)
-        K_pj  = PureKLU.klu(A; use_fma=false)
+        K_pj  = PureKLU.klu(A; use_fma=USE_FMA)
         @test K_ref.symbolic.nz == getfield(K_pj, :symbolic).nz
         @test K_ref.symbolic.nzoff == getfield(K_pj, :symbolic).nzoff
         @test K_ref.symbolic.nblocks == getfield(K_pj, :symbolic).nblocks
@@ -220,7 +225,7 @@ end
     ]
     for A in test_cases
         K_ref = KLU.klu(A)
-        K_pj  = PureKLU.klu(A; use_fma=false)
+        K_pj  = PureKLU.klu(A; use_fma=USE_FMA)
         @test K_ref.numeric.lnz == getfield(K_pj, :numeric).lnz
         @test K_ref.numeric.unz == getfield(K_pj, :numeric).unz
         @test K_ref.numeric.max_lnz_block ==
@@ -236,7 +241,7 @@ end
 
 function strict_match_all(A::SparseMatrixCSC)
     K_ref = KLU.klu(A)
-    K_pj  = PureKLU.klu(A; use_fma=false)
+    K_pj  = PureKLU.klu(A; use_fma=USE_FMA)
     @test K_ref.p == K_pj.p
     @test K_ref.q == K_pj.q
     @test K_ref.R == K_pj.R
@@ -331,7 +336,7 @@ end
 @testset "solve: vector, matrix, complex RHS all match" begin
     Random.seed!(7)
     A = sprand(20, 20, 0.2) + 20*I
-    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma=false)
+    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma=USE_FMA)
 
     # vector RHS
     b = randn(20)
@@ -351,7 +356,7 @@ end
 @testset "tsolve / adjoint solve match" begin
     Random.seed!(8)
     A = sprand(20, 20, 0.2) + 20*I
-    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma=false)
+    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma=USE_FMA)
     b = randn(20)
     B = randn(20, 4)
 
@@ -394,14 +399,14 @@ end
         A = sparse(I_idx, J_idx, V1, n, n)
         B = sparse(I_idx, J_idx, V2, n, n)
         K_ref = KLU.klu(A); KLU.klu!(K_ref, B)
-        K_pj  = PureKLU.klu(A; use_fma=false); PureKLU.klu!(K_pj, B)
+        K_pj  = PureKLU.klu(A; use_fma=USE_FMA); PureKLU.klu!(K_pj, B)
         @test K_ref.L == K_pj.L
         @test K_ref.U == K_pj.U
         @test K_ref.F == K_pj.F
         @test K_ref.Rs == K_pj.Rs
         # refactor with just nzval
         K_ref2 = KLU.klu(A); KLU.klu!(K_ref2, B.nzval)
-        K_pj2  = PureKLU.klu(A; use_fma=false); PureKLU.klu!(K_pj2, B.nzval)
+        K_pj2  = PureKLU.klu(A; use_fma=USE_FMA); PureKLU.klu!(K_pj2, B.nzval)
         @test K_ref2.L == K_pj2.L
         @test K_ref2.U == K_pj2.U
         @test K_ref2.F == K_pj2.F
@@ -416,7 +421,7 @@ end
         A = sprand(n, n, 0.3) + n*I
         # When btf=0 and ordering=2, KLU uses identity-ish processing.
         K_ref = KLU.klu(A; check=false)
-        K_pj  = PureKLU.klu(A; check=false, use_fma=false)
+        K_pj  = PureKLU.klu(A; check=false, use_fma=USE_FMA)
         K_ref.common.btf = Int32(0); K_pj.common.btf = Int32(0)
         K_ref.common.ordering = Int32(2); K_pj.common.ordering = Int32(2)
         KLU.klu_factor!(K_ref)
@@ -522,7 +527,7 @@ end
     proto = sprand(n, n, 0.2) + n*I
     I_idx, J_idx, _ = findnz(proto)
     K_ref = KLU.klu(proto)
-    K_pj  = PureKLU.klu(proto; use_fma=false)
+    K_pj  = PureKLU.klu(proto; use_fma=USE_FMA)
     for iter in 1:5
         V = randn(length(I_idx)) .+ 0.7
         B = sparse(I_idx, J_idx, V, n, n)
@@ -544,7 +549,7 @@ end
     for n in (10, 30, 60, 100)
         A = sprand(n, n, 0.15) + n*I
         dropzeros!(A)
-        for K in (KLU.klu(A), PureKLU.klu(A; use_fma=false))
+        for K in (KLU.klu(A), PureKLU.klu(A; use_fma=USE_FMA))
             Rs = Diagonal(K.Rs)
             @test Rs \ A[K.p, K.q] ≈ K.L * K.U + K.F
         end
@@ -556,7 +561,7 @@ end
 @testset "ldiv! vs \\\\: both implementations consistent" begin
     Random.seed!(81)
     A = sprand(40, 40, 0.15) + 40*I
-    K_pj = PureKLU.klu(A; use_fma=false)
+    K_pj = PureKLU.klu(A; use_fma=USE_FMA)
     K_ref = KLU.klu(A)
     b = randn(40)
     x1 = K_pj \ b
@@ -584,7 +589,7 @@ end
     K_ref = KLU.KLUFactorization(A)
     KLU.klu_analyze!(K_ref, copy(P_user), copy(Q_user))
     K_pj = PureKLU.KLUFactorization(A)
-    K_pj.common.use_fma = Val(false)
+    K_pj.common.use_fma = Val(USE_FMA)
     PureKLU.klu_analyze!(K_pj, copy(P_user), copy(Q_user))
     @test K_ref.symbolic.nz == getfield(K_pj, :symbolic).nz
     @test K_ref.symbolic.nblocks == getfield(K_pj, :symbolic).nblocks
@@ -600,7 +605,7 @@ end
 @testset "Degenerate sizes 1x1, 2x2" begin
     # 1x1
     A1 = sparse(reshape([3.0], 1, 1))
-    K_ref = KLU.klu(A1); K_pj = PureKLU.klu(A1; use_fma=false)
+    K_ref = KLU.klu(A1); K_pj = PureKLU.klu(A1; use_fma=USE_FMA)
     @test K_ref.p == K_pj.p
     @test K_ref.q == K_pj.q
     @test K_ref.U == K_pj.U
@@ -614,7 +619,7 @@ end
         Float64[3 1; 1 3],
     )
         A = sparse(M)
-        K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma=false)
+        K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma=USE_FMA)
         @test K_ref.p == K_pj.p
         @test K_ref.q == K_pj.q
         @test K_ref.L == K_pj.L
