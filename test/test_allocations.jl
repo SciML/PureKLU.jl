@@ -1,8 +1,3 @@
-# Locks in the zero-heap-allocation property of the user-visible solve
-# paths.  `klu_factor!` still allocates today (the per-block LU storage
-# grows dynamically); see `docs/workspace-design.md` for the plan to
-# zero it out in follow-up PRs.
-
 using PureKLU
 using PureKLU: klu, klu!, klu_factor!, klu_analyze!, solve!
 using SparseArrays
