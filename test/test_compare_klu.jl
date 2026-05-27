@@ -16,28 +16,33 @@ import KLU
 
 const SUITESPARSE = KLU
 
-# Strict bit-for-bit equality with SuiteSparse's `libklu` is the headline
-# guarantee on x86_64-linux, the platform whose SSE2-baseline binary the
-# `use_fma=false` path is calibrated against. On other platforms (notably
-# aarch64-apple-darwin, where the SuiteSparse binary is built with FMA
-# enabled as part of the ARMv8 baseline), the reference takes a different
-# rounding path per multiply-subtract; for full LU factorisations this
-# compounds to many ULPs of drift, so we fall back to Julia's default
-# `isapprox` tolerance (rtol = sqrt(eps)) on those platforms only.
+# `STRICT_FP` is true on x86_64-{linux,windows}, the platforms whose
+# `SuiteSparse_jll` `libklu` binary is built SSE2-only (no FMA emission).
+# On those platforms PureKLU bit-matches the reference with `use_fma=false`.
+# On aarch64-apple-darwin (ARMv8 baseline includes FMA) the same C source
+# is compiled with `fmsub` in the hot loops, and PureKLU bit-matches it
+# instead with `use_fma=true` (verified by disassembly + experiment).
+# `USE_FMA` is the FMA mode that yields real-Float64 bit-equality on the
+# current platform; the real testsets thread it through. Complex tests
+# can't reach bit-equality on macOS (different `_cdiv`/`_ssabs` algorithms
+# from SuiteSparse), so they use `use_fma=false` and the looser
+# `strict_eq` fallback below.
 const STRICT_FP = Sys.islinux() && Sys.ARCH === :x86_64
+const USE_FMA = !STRICT_FP
 strict_eq(a, b) = STRICT_FP ? a == b : isapprox(a, b)
 
 """
     compare_strict(A)
 
 Strict equality: BTF, permutations, scaling, factor pattern and the
-solve all match bit-for-bit. PureKLU is invoked with `use_fma=false`
-so its multiply-subtract loops emit the same separate `mulsd`/`subsd`
-sequence as SuiteSparse's SSE2-baseline `libklu.so`.
+solve all match bit-for-bit. PureKLU is invoked with `use_fma=USE_FMA`,
+which selects the FMA mode matching `libklu`'s code generation on the
+current platform (`false` on SSE2-only x86_64 builds, `true` on ARMv8
+where the baseline emits `fmsub`).
 """
 function compare_strict(A::SparseMatrixCSC{Float64})
     K_ref = SUITESPARSE.klu(A)
-    K_pj  = PureKLU.klu(A; use_fma=false)
+    K_pj  = PureKLU.klu(A; use_fma=USE_FMA)
 
     @test K_ref.nblocks == K_pj.nblocks
     @test K_ref.lnz == K_pj.lnz
@@ -76,7 +81,7 @@ still require:
 """
 function compare_loose(A::SparseMatrixCSC{Float64})
     K_ref = SUITESPARSE.klu(A)
-    K_pj  = PureKLU.klu(A; use_fma=false)
+    K_pj  = PureKLU.klu(A; use_fma=USE_FMA)
 
     @test K_ref.nblocks == K_pj.nblocks
     @test K_ref.R == K_pj.R
@@ -131,7 +136,7 @@ end
     A = sparse(Ap, Ai, Ax1)
     B = sparse(Ap, Ai, Ax2)
     K_ref = SUITESPARSE.klu(A); SUITESPARSE.klu!(K_ref, B)
-    K_pj  = PureKLU.klu(A; use_fma=false); PureKLU.klu!(K_pj, B)
+    K_pj  = PureKLU.klu(A; use_fma=USE_FMA); PureKLU.klu!(K_pj, B)
     @test K_ref.L == K_pj.L
     @test K_ref.U == K_pj.U
     @test K_ref.F == K_pj.F
