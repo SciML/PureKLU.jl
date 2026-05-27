@@ -36,7 +36,7 @@ function amd_aat!(n::Int, Ap::AbstractVector{Ti}, Ai::AbstractVector{Ti},
     nzdiag = 0
     nzboth = 0
     nz = Int(Ap[n+1])
-    for k in 0:(n-1)
+    @inbounds for k in 0:(n-1)
         p = Int(Ap[k+1])
         p2 = Int(Ap[k+2])
         while p < p2
@@ -77,7 +77,7 @@ function amd_aat!(n::Int, Ap::AbstractVector{Ti}, Ai::AbstractVector{Ti},
         end
         Tp[k+1] = Ti(p)
     end
-    for j in 0:(n-1)
+    @inbounds for j in 0:(n-1)
         pj = Int(Tp[j+1])
         pjend = Int(Ap[j+2])
         while pj < pjend
@@ -107,6 +107,64 @@ end
     return wflg
 end
 
+# Out-of-line garbage collection for the workspace `Iw`.  Rare path; keeping
+# it noinline lets the surrounding hot loop stay tight.
+@noinline function _amd_gc!(n::Int, me::Int, e::Int, p_in::Int, pj_in::Int,
+                            knt1::Int, knt2::Int, ln::Int, pme1::Int, pfree_in::Int,
+                            Pe::Vector{Ti}, Iw::Vector{Ti},
+                            Len::Vector{Ti}) where {Ti<:Integer}
+    p = p_in
+    pj = pj_in
+    pfree = pfree_in
+    @inbounds begin
+        Pe[me+1] = Ti(p)
+        Len[me+1] -= Ti(knt1)
+        if Len[me+1] == 0
+            Pe[me+1] = Ti(EMPTY)
+        end
+        Pe[e+1] = Ti(pj)
+        Len[e+1] = Ti(ln - knt2)
+        if Len[e+1] == 0
+            Pe[e+1] = Ti(EMPTY)
+        end
+        for j in 0:(n-1)
+            pn = Int(Pe[j+1])
+            if pn >= 0
+                Pe[j+1] = Iw[pn+1]
+                Iw[pn+1] = Ti(_flip(j))
+            end
+        end
+        psrc = 0
+        pdst = 0
+        pend = pme1 - 1
+        while psrc <= pend
+            j = _flip(Int(Iw[psrc+1]))
+            psrc += 1
+            if j >= 0
+                Iw[pdst+1] = Pe[j+1]
+                Pe[j+1] = Ti(pdst)
+                pdst += 1
+                lenj = Int(Len[j+1])
+                for _knt3 in 1:(lenj - 1)
+                    Iw[pdst+1] = Iw[psrc+1]
+                    pdst += 1; psrc += 1
+                end
+            end
+        end
+        p1_local = pdst
+        psrc = pme1
+        while psrc <= pfree - 1
+            Iw[pdst+1] = Iw[psrc+1]
+            pdst += 1; psrc += 1
+        end
+        pme1 = p1_local
+        pfree = pdst
+        pj = Int(Pe[e+1])
+        p = Int(Pe[me+1])
+    end
+    return (p, pj, pfree, pme1)
+end
+
 """
     amd_2!(n, Pe, Iw, Len, iwlen, pfree, Nv, Next, Last, Head, Elen, Degree, W,
            dense_threshold, aggressive) -> nothing
@@ -130,7 +188,6 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
     lemax = 0
     me = EMPTY
 
-    # Note: alpha matches SuiteSparse default 10.0
     dense = dense_alpha < 0 ? n - 2 : floor(Int, dense_alpha * sqrt(Float64(n)))
     dense = max(16, dense)
     dense = min(n, dense)
@@ -149,7 +206,7 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
     wflg = _clear_flag(0, Int(wbig), W, n)
 
     ndense = 0
-    for i in 0:(n-1)
+    @inbounds for i in 0:(n-1)
         deg = Int(Degree[i+1])
         if deg == 0
             Elen[i+1] = Ti(_flip(1))
@@ -172,7 +229,7 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
         end
     end
 
-    while nel < n
+    @inbounds while nel < n
         # --- pick minimum-degree pivot
         deg = mindeg
         while deg < n
@@ -202,7 +259,8 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
         if elenme == 0
             pme1 = Int(Pe[me+1])
             pme2 = pme1 - 1
-            for p in pme1:(pme1 + Int(Len[me+1]) - 1)
+            lenme = Int(Len[me+1])
+            for p in pme1:(pme1 + lenme - 1)
                 i = Int(Iw[p+1])
                 nvi = Int(Nv[i+1])
                 if nvi > 0
@@ -239,59 +297,14 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
                     ln = Int(Len[e+1])
                 end
 
-                knt2 = 1
-                while knt2 <= ln
+                for knt2 in 1:ln
                     i = Int(Iw[pj+1]); pj += 1
                     nvi = Int(Nv[i+1])
                     if nvi > 0
                         if pfree >= iwlen
-                            Pe[me+1] = Ti(p)
-                            Len[me+1] -= Ti(knt1)
-                            if Len[me+1] == 0
-                                Pe[me+1] = Ti(EMPTY)
-                            end
-                            Pe[e+1] = Ti(pj)
-                            Len[e+1] = Ti(ln - knt2)
-                            if Len[e+1] == 0
-                                Pe[e+1] = Ti(EMPTY)
-                            end
-
                             ncmpa += 1
-                            # garbage collection
-                            for j in 0:(n-1)
-                                pn = Int(Pe[j+1])
-                                if pn >= 0
-                                    Pe[j+1] = Iw[pn+1]
-                                    Iw[pn+1] = Ti(_flip(j))
-                                end
-                            end
-                            psrc = 0
-                            pdst = 0
-                            pend = pme1 - 1
-                            while psrc <= pend
-                                j = _flip(Int(Iw[psrc+1]))
-                                psrc += 1
-                                if j >= 0
-                                    Iw[pdst+1] = Pe[j+1]
-                                    Pe[j+1] = Ti(pdst)
-                                    pdst += 1
-                                    lenj = Int(Len[j+1])
-                                    for _knt3 in 1:(lenj - 1)
-                                        Iw[pdst+1] = Iw[psrc+1]
-                                        pdst += 1; psrc += 1
-                                    end
-                                end
-                            end
-                            p1 = pdst
-                            psrc = pme1
-                            while psrc <= pfree - 1
-                                Iw[pdst+1] = Iw[psrc+1]
-                                pdst += 1; psrc += 1
-                            end
-                            pme1 = p1
-                            pfree = pdst
-                            pj = Int(Pe[e+1])
-                            p = Int(Pe[me+1])
+                            p, pj, pfree, pme1 = _amd_gc!(n, me, e, p, pj, knt1, knt2, ln,
+                                                          pme1, pfree, Pe, Iw, Len)
                         end
 
                         degme += nvi
@@ -310,7 +323,6 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
                             Head[Int(Degree[i+1])+1] = Ti(inext2)
                         end
                     end
-                    knt2 += 1
                 end
 
                 if e != me
@@ -335,7 +347,8 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
             if eln > 0
                 nvi = -Int(Nv[i+1])
                 wnvi = wflg - nvi
-                for pp in Int(Pe[i+1]):(Int(Pe[i+1]) + eln - 1)
+                pibase = Int(Pe[i+1])
+                for pp in pibase:(pibase + eln - 1)
                     e = Int(Iw[pp+1])
                     we = Int(W[e+1])
                     if we >= wflg
@@ -386,7 +399,8 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
                 end
             end
 
-            Elen[i+1] = Ti(pn - p1 + 1)
+            elen_new = pn - p1 + 1
+            Elen[i+1] = Ti(elen_new)
 
             p3 = pn
             p4 = p1 + Int(Len[i+1])
@@ -400,7 +414,7 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
                 end
             end
 
-            if Elen[i+1] == 1 && p3 == pn
+            if elen_new == 1 && p3 == pn
                 Pe[i+1] = Ti(_flip(me))
                 nvi = -Int(Nv[i+1])
                 degme -= nvi
@@ -409,7 +423,8 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
                 Nv[i+1] = Ti(0)
                 Elen[i+1] = Ti(EMPTY)
             else
-                Degree[i+1] = Ti(min(Int(Degree[i+1]), deg))
+                degi = Int(Degree[i+1])
+                Degree[i+1] = Ti(deg < degi ? deg : degi)
 
                 Iw[pn+1] = Iw[p3+1]
                 Iw[p3+1] = Iw[p1+1]
@@ -431,7 +446,9 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
         end
 
         Degree[me+1] = Ti(degme)
-        lemax = max(lemax, degme)
+        if degme > lemax
+            lemax = degme
+        end
         wflg += lemax
         wflg = _clear_flag(wflg, Int(wbig), W, n)
 
@@ -455,8 +472,9 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
                     ln = Int(Len[i+1])
                     eln = Int(Elen[i+1])
                     pi = Int(Pe[i+1])
-                    @inbounds for pp in (pi + 1):(pi + ln - 1)
-                        W[Int(Iw[pp+1])+1] = Ti(wflg)
+                    wflg_t = Ti(wflg)
+                    for pp in (pi + 1):(pi + ln - 1)
+                        W[Int(Iw[pp+1])+1] = wflg_t
                     end
 
                     jlast = i
@@ -464,13 +482,17 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
 
                     while j != EMPTY
                         ok = (Int(Len[j+1]) == ln) && (Int(Elen[j+1]) == eln)
-                        pj0 = Int(Pe[j+1])
-                        pp = pj0 + 1
-                        while ok && pp <= pj0 + ln - 1
-                            if W[Int(Iw[pp+1])+1] != Ti(wflg)
-                                ok = false
+                        if ok
+                            pj0 = Int(Pe[j+1])
+                            ppend = pj0 + ln - 1
+                            pp = pj0 + 1
+                            while pp <= ppend
+                                if W[Int(Iw[pp+1])+1] != wflg_t
+                                    ok = false
+                                    break
+                                end
+                                pp += 1
                             end
-                            pp += 1
                         end
                         if ok
                             Pe[j+1] = Ti(_flip(i))
@@ -500,7 +522,10 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
             if nvi > 0
                 Nv[i+1] = Ti(nvi)
                 deg = Int(Degree[i+1]) + degme - nvi
-                deg = min(deg, nleft - nvi)
+                cap = nleft - nvi
+                if deg > cap
+                    deg = cap
+                end
                 inext2 = Int(Head[deg+1])
                 if inext2 != EMPTY
                     Last[inext2+1] = Ti(i)
@@ -508,7 +533,9 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
                 Next[i+1] = Ti(inext2)
                 Last[i+1] = Ti(EMPTY)
                 Head[deg+1] = Ti(i)
-                mindeg = min(mindeg, deg)
+                if deg < mindeg
+                    mindeg = deg
+                end
                 Degree[i+1] = Ti(deg)
                 Iw[p+1] = Ti(i); p += 1
             end
@@ -534,7 +561,7 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
     end
 
     # --- Path compression: variables with Nv[i]=0 traverse to element ---
-    for i in 0:(n-1)
+    @inbounds for i in 0:(n-1)
         if Nv[i+1] == 0
             j = Int(Pe[i+1])
             if j == EMPTY
@@ -569,7 +596,7 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
     end
 
     nel = 0
-    for k in 0:(n-1)
+    @inbounds for k in 0:(n-1)
         e = Int(Head[k+1])
         if e == EMPTY
             break
@@ -578,7 +605,7 @@ function amd_2!(n::Int, Pe::Vector{Ti}, Iw::Vector{Ti}, Len::Vector{Ti},
         nel += Int(Nv[e+1])
     end
 
-    for i in 0:(n-1)
+    @inbounds for i in 0:(n-1)
         if Nv[i+1] == 0
             e = Int(Pe[i+1])
             if e != EMPTY
@@ -611,7 +638,7 @@ function amd_postorder!(nn::Int, Parent::Vector{Ti}, Nv::Vector{Ti}, Fsize::Vect
         Sibling[j] = Ti(EMPTY)
     end
 
-    for j in (nn-1):-1:0
+    @inbounds for j in (nn-1):-1:0
         if Nv[j+1] > 0
             parent = Int(Parent[j+1])
             if parent != EMPTY
@@ -621,7 +648,7 @@ function amd_postorder!(nn::Int, Parent::Vector{Ti}, Nv::Vector{Ti}, Fsize::Vect
         end
     end
 
-    for i in 0:(nn-1)
+    @inbounds for i in 0:(nn-1)
         if Nv[i+1] > 0 && Child[i+1] != Ti(EMPTY)
             fprev = EMPTY
             maxfrsize = EMPTY
@@ -674,11 +701,10 @@ function amd_post_tree!(root::Int, k_in::Int, Child::Vector{Ti}, Sibling::Vector
                         Order::Vector{Ti}, Stack::Vector{Ti}) where {Ti<:Integer}
     k = k_in
     head = 0
-    Stack[1] = Ti(root)
-    while head >= 0
+    @inbounds Stack[1] = Ti(root)
+    @inbounds while head >= 0
         i = Int(Stack[head+1])
         if Child[i+1] != Ti(EMPTY)
-            # push children in reverse so smallest is popped first
             f = Int(Child[i+1])
             while f != EMPTY
                 head += 1
@@ -701,39 +727,41 @@ function amd_post_tree!(root::Int, k_in::Int, Child::Vector{Ti}, Sibling::Vector
 end
 
 """
-    amd_1!(n, Ap, Ai, P, Pinv, Len, slen, S; dense_alpha, aggressive)
+    amd_1!(n, Ap, Ai, P, Pinv, Len, slen; dense_alpha, aggressive)
 
 Build the A+A' representation in workspace and dispatch to `amd_2!`.
 Mirrors `amd_1.c`.
 """
 function amd_1!(n::Int, Ap::AbstractVector{Ti}, Ai::AbstractVector{Ti},
                 P::Vector{Ti}, Pinv::Vector{Ti}, Len::Vector{Ti},
-                slen::Int, S::Vector{Ti};
+                slen::Int;
                 dense_alpha::Float64=AMD_DEFAULT_DENSE,
                 aggressive::Bool=AMD_DEFAULT_AGGRESSIVE != 0) where {Ti<:Integer}
 
     iwlen = slen - 6n
-    s = 1
-    Pe = view(S, s:(s+n-1));     s += n
-    Nv = view(S, s:(s+n-1));     s += n
-    Head = view(S, s:(s+n-1));   s += n
-    Elen = view(S, s:(s+n-1));   s += n
-    Degree = view(S, s:(s+n-1)); s += n
-    W = view(S, s:(s+n-1));      s += n
-    Iw = view(S, s:(s+iwlen-1))
+    # Allocate dedicated Vector{Ti} buffers up front; pass them by name to
+    # amd_2!.  Using slices of `S` (via `view` + `collect`) duplicated all
+    # data and forced an extra dispatch layer.
+    Pe = Vector{Ti}(undef, n)
+    Nv = Vector{Ti}(undef, n)
+    Head = Vector{Ti}(undef, n)
+    Elen = Vector{Ti}(undef, n)
+    Degree = Vector{Ti}(undef, n)
+    W = Vector{Ti}(undef, n)
+    Iw = Vector{Ti}(undef, iwlen)
 
     # Use Nv and W as workspace for Sp and Tp during matrix construction
     Sp = Nv
     Tp = W
 
     pfree = 0
-    for j in 0:(n-1)
+    @inbounds for j in 0:(n-1)
         Pe[j+1] = Ti(pfree)
         Sp[j+1] = Ti(pfree)
         pfree += Int(Len[j+1])
     end
 
-    for k in 0:(n-1)
+    @inbounds for k in 0:(n-1)
         p = Int(Ap[k+1])
         p2 = Int(Ap[k+2])
         while p < p2
@@ -775,7 +803,7 @@ function amd_1!(n::Int, Ap::AbstractVector{Ti}, Ai::AbstractVector{Ti},
         Tp[k+1] = Ti(p)
     end
 
-    for j in 0:(n-1)
+    @inbounds for j in 0:(n-1)
         pj = Int(Tp[j+1])
         pjend = Int(Ap[j+2])
         while pj < pjend
@@ -788,17 +816,9 @@ function amd_1!(n::Int, Ap::AbstractVector{Ti}, Ai::AbstractVector{Ti},
         end
     end
 
-    # Now call amd_2 -- it needs concrete Vector{Ti}, so we copy out of S.
-    Pe_v = collect(Pe)
-    Iw_v = collect(Iw)
-    Nv_v = Vector{Ti}(undef, n)
-    Head_v = Vector{Ti}(undef, n)
-    Elen_v = Vector{Ti}(undef, n)
-    Degree_v = Vector{Ti}(undef, n)
-    W_v = Vector{Ti}(undef, n)
     # Pinv and P are output buffers (size n)
-    amd_2!(n, Pe_v, Iw_v, Len, iwlen, pfree,
-           Nv_v, Pinv, P, Head_v, Elen_v, Degree_v, W_v;
+    amd_2!(n, Pe, Iw, Len, iwlen, pfree,
+           Nv, Pinv, P, Head, Elen, Degree, W;
            dense_alpha, aggressive)
     return nothing
 end
@@ -832,9 +852,8 @@ function amd_order!(n::Int, Ap::AbstractVector{Ti}, Ai::AbstractVector{Ti},
 
     slen = nzaat + nzaat ÷ 5
     slen += 7 * n
-    S = Vector{Ti}(undef, slen)
 
-    amd_1!(n, Ap, Ai, P, Pinv, Len, slen, S;
+    amd_1!(n, Ap, Ai, P, Pinv, Len, slen;
            dense_alpha, aggressive)
     return AMD_OK
 end
