@@ -37,13 +37,17 @@ const klu_common = KLUCommon{Int32}
 const klu_l_common = KLUCommon{Int64}
 const klu_symbolic = KLUSymbolic{Int32}
 const klu_l_symbolic = KLUSymbolic{Int64}
-const klu_numeric = KLUNumeric{Float64, Int32}
-const klu_l_numeric = KLUNumeric{Float64, Int64}
+const klu_numeric = KLUNumeric{Float64, Int32, Float64}
+const klu_l_numeric = KLUNumeric{Float64, Int64, Float64}
 
 const AdjointFact = isdefined(LinearAlgebra, :AdjointFactorization) ? LinearAlgebra.AdjointFactorization : Adjoint
 const TransposeFact = isdefined(LinearAlgebra, :TransposeFactorization) ? LinearAlgebra.TransposeFactorization : Transpose
 
+# `KLUTypes` is the legacy KLU.jl alias; `klu(...)` actually dispatches
+# on `KLUGenericTypes`, which is broad enough to cover `ForwardDiff.Dual`
+# (`<:Real` but not `<:AbstractFloat`) and any other user number type.
 const KLUTypes = Union{Float64, ComplexF64}
+const KLUGenericTypes = Union{Real, Complex}
 
 if sizeof(Int) == 4
     const KLUITypes = Int32
@@ -93,10 +97,13 @@ Matrix factorization type for KLU. Constructed by [`klu`](@ref).
 Mirrors the field names of `KLU.jl`'s `KLUFactorization` so the same
 property accessors (`F.L`, `F.U`, `F.F`, `F.p`, `F.q`, `F.Rs`, …) work.
 """
-mutable struct KLUFactorization{Tv<:KLUTypes, Ti<:Integer} <: AbstractKLUFactorization{Tv, Ti}
+mutable struct KLUFactorization{Tv, Ti<:Integer, Tr<:Real} <: AbstractKLUFactorization{Tv, Ti}
     common::KLUCommon{Ti}
     symbolic::Union{KLUSymbolic{Ti}, Nothing}
-    numeric::Union{KLUNumeric{Tv, Ti}, Nothing}
+    # `Tr` is the third type parameter so this field is concrete -- a
+    # `Union{KLUNumeric{Tv,Ti,<:Real}, Nothing}` would defeat the
+    # zero-allocation hot-path dispatch.
+    numeric::Union{KLUNumeric{Tv, Ti, Tr}, Nothing}
     n::Int
     colptr::Vector{Ti}    # 0-based
     rowval::Vector{Ti}    # 0-based
@@ -104,12 +111,13 @@ mutable struct KLUFactorization{Tv<:KLUTypes, Ti<:Integer} <: AbstractKLUFactori
 
     function KLUFactorization(n::Integer, colptr::Vector{Ti}, rowval::Vector{Ti},
                               nzval::Vector{Tv}) where {Ti<:Integer, Tv}
+        Tr = _real_eltype(Tv)
         common = KLUCommon{Ti}()
-        return new{Tv, Ti}(common, nothing, nothing, Int(n), colptr, rowval, nzval)
+        return new{Tv, Ti, Tr}(common, nothing, nothing, Int(n), colptr, rowval, nzval)
     end
 end
 
-function KLUFactorization(A::SparseMatrixCSC{Tv, Ti}) where {Tv<:KLUTypes, Ti<:Integer}
+function KLUFactorization(A::SparseMatrixCSC{Tv, Ti}) where {Tv, Ti<:Integer}
     n = size(A, 1)
     n == size(A, 2) || throw(ArgumentError("KLU only accepts square matrices."))
     return KLUFactorization(n, decrement(A.colptr), decrement(A.rowval), copy(A.nzval))
@@ -200,41 +208,31 @@ function klu_factor!(K::KLUFactorization{Tv, Ti}; check::Bool=true,
     return K
 end
 
-# klu!(K, A) / klu!(K, nzval): refactorise using new numeric values but the
-# same nonzero pattern. One concrete method is generated for each
-# (Tv, Ti) combination so dispatch is unambiguous with the conversion
-# wrappers below.
-for Tv in (:Float64, :ComplexF64), Ti in (:Int32, :Int64)
-    @eval function klu!(K::KLUFactorization{$Tv, $Ti}, nzval::Vector{$Tv};
-                        check::Bool=true, allowsingular::Bool=false)
-        length(nzval) != length(K.nzval) && throw(DimensionMismatch())
-        K.nzval = nzval
-        K.common.halt_if_singular = (!allowsingular && check) ? Cint(1) : Cint(0)
-        klu_refactor!(getfield(K, :symbolic), getfield(K, :numeric),
-                      K.colptr, K.rowval, K.nzval, K.common; allowsingular)
-        K.common.halt_if_singular = Cint(1)
-        if K.common.status < KLU_OK && check
-            kluerror(K.common)
-        end
-        if K.common.status == KLU_SINGULAR && !allowsingular && check
-            kluerror(K.common)
-        end
-        return K
+function klu!(K::KLUFactorization{Tv, Ti}, nzval::Vector{Tv};
+              check::Bool=true, allowsingular::Bool=false) where {Tv, Ti}
+    length(nzval) != length(K.nzval) && throw(DimensionMismatch())
+    K.nzval = nzval
+    K.common.halt_if_singular = (!allowsingular && check) ? Cint(1) : Cint(0)
+    klu_refactor!(getfield(K, :symbolic), getfield(K, :numeric),
+                  K.colptr, K.rowval, K.nzval, K.common; allowsingular)
+    K.common.halt_if_singular = Cint(1)
+    if K.common.status < KLU_OK && check
+        kluerror(K.common)
     end
+    if K.common.status == KLU_SINGULAR && !allowsingular && check
+        kluerror(K.common)
+    end
+    return K
 end
 
-function klu!(K::KLUFactorization{ComplexF64}, nzval::Vector{U};
-              check::Bool=true, allowsingular::Bool=false) where {U<:Complex}
-    return klu!(K, convert(Vector{ComplexF64}, nzval); check, allowsingular)
+# Eltype-mismatched fallback: convert rather than throw.
+function klu!(K::KLUFactorization{Tv, Ti}, nzval::Vector{U};
+              check::Bool=true, allowsingular::Bool=false) where {Tv, Ti, U}
+    return klu!(K, convert(Vector{Tv}, nzval); check, allowsingular)
 end
 
-function klu!(K::KLUFactorization{Float64}, nzval::Vector{U};
-              check::Bool=true, allowsingular::Bool=false) where {U<:AbstractFloat}
-    return klu!(K, convert(Vector{Float64}, nzval); check, allowsingular)
-end
-
-function klu!(K::KLUFactorization{U}, S::SparseMatrixCSC{U};
-              check::Bool=true, allowsingular::Bool=false) where {U}
+function klu!(K::KLUFactorization{Tv, Ti}, S::SparseMatrixCSC;
+              check::Bool=true, allowsingular::Bool=false) where {Tv, Ti}
     size(K) == size(S) || throw(ArgumentError("Sizes of K and S must match."))
     increment!(K.colptr); increment!(K.rowval)
     pattern_ok = K.colptr == S.colptr && K.rowval == S.rowval
@@ -262,22 +260,7 @@ Compute the LU factorisation of a sparse matrix using KLU.
 function klu(n::Integer, colptr::Vector{Ti}, rowval::Vector{Ti}, nzval::Vector{Tv};
              check::Bool=true, allowsingular::Bool=false,
              full_factor::Bool=true, use_fma=true,
-             ) where {Ti<:KLUITypes, Tv<:AbstractFloat}
-    if Tv != Float64
-        nzval = convert(Vector{Float64}, nzval)
-    end
-    K = KLUFactorization(n, colptr, rowval, nzval)
-    K.common.use_fma = _as_val(use_fma)
-    return full_factor ? klu_factor!(K; check, allowsingular) : klu_analyze!(K; check)
-end
-
-function klu(n::Integer, colptr::Vector{Ti}, rowval::Vector{Ti}, nzval::Vector{Tv};
-             check::Bool=true, allowsingular::Bool=false,
-             full_factor::Bool=true, use_fma=true,
-             ) where {Ti<:KLUITypes, Tv<:Complex}
-    if Tv != ComplexF64
-        nzval = convert(Vector{ComplexF64}, nzval)
-    end
+             ) where {Ti<:KLUITypes, Tv<:KLUGenericTypes}
     K = KLUFactorization(n, colptr, rowval, nzval)
     K.common.use_fma = _as_val(use_fma)
     return full_factor ? klu_factor!(K; check, allowsingular) : klu_analyze!(K; check)
@@ -286,7 +269,7 @@ end
 function klu(A::SparseMatrixCSC{Tv, Ti}; check::Bool=true,
              allowsingular::Bool=false, full_factor::Bool=true,
              use_fma=true,
-             ) where {Tv<:Union{AbstractFloat, Complex}, Ti<:KLUITypes}
+             ) where {Tv<:KLUGenericTypes, Ti<:KLUITypes}
     n = size(A, 1)
     n == size(A, 2) || throw(DimensionMismatch())
     return klu(n, decrement(A.colptr), decrement(A.rowval), A.nzval;
@@ -342,7 +325,7 @@ end
 
 solve(K, B; check::Bool=true) = solve!(K, copy(B); check)
 
-LinearAlgebra.ldiv!(K::AbstractKLUFactorization{Tv}, B::StridedVecOrMat{Tv}) where {Tv<:KLUTypes} =
+LinearAlgebra.ldiv!(K::AbstractKLUFactorization{Tv}, B::StridedVecOrMat{Tv}) where {Tv} =
     solve!(K, B)
 LinearAlgebra.ldiv!(K::Union{AdjointFact{Tv, KF}, TransposeFact{Tv, KF}}, B::StridedVecOrMat{Tv}) where {Tv, Ti, KF<:AbstractKLUFactorization{Tv, Ti}} =
     solve!(K, B)
@@ -417,7 +400,8 @@ function getproperty(K::AbstractKLUFactorization{Tv, Ti}, s::Symbol) where {Tv, 
         nb = Int(Sym.nblocks)
         out = Sym.R[1:nb+1]; out .+= one(Ti); return out
     elseif s === :Rs
-        return isempty(Num.Rs) ? fill(1.0, K.n) : copy(Num.Rs)
+        Tr = _real_eltype(Tv)
+        return isempty(Num.Rs) ? fill(one(Tr), K.n) : copy(Num.Rs)
     elseif s === :L
         return _extract_L(K)
     elseif s === :U
