@@ -19,27 +19,10 @@ using Random
 import KLU
 import AMD as SuiteSparseAMD
 
-# `STRICT_FP`, `USE_FMA` and `strict_eq` are also defined in
-# `test_compare_klu.jl` (loaded earlier by `runtests.jl`).  Define them
-# again here, locally, so this file can also be run standalone
-# (e.g. `julia --project=. test/test_phases.jl`).
-#
-# `USE_FMA` is the FMA mode that makes PureKLU bit-match the
-# `SuiteSparse_jll` `libklu` binary on the current platform:
-#   - `false` on x86_64-{linux,windows}: SSE2-only baseline emits
-#     `mulsd`+`subsd` (two roundings) for `a - b*c`.
-#   - `true`  on aarch64-darwin: ARMv8 baseline emits `fmsub`
-#     (one rounding).
-# Real-Float64 testsets thread `use_fma=USE_FMA` through every factor
-# call so bit-equality holds on every platform. Complex testsets keep
-# `use_fma=false` and use `strict_eq`, since `_cdiv`/`_ssabs` in
-# `Val(true)` use Julia's algorithms (different from SuiteSparse) so
-# complex bit-equality is only reachable on `STRICT_FP` platforms.
-if !isdefined(@__MODULE__, :STRICT_FP)
-    const STRICT_FP = Sys.islinux() && Sys.ARCH === :x86_64
-    const USE_FMA = !STRICT_FP
-    strict_eq(a, b) = STRICT_FP ? a == b : isapprox(a, b)
-end
+# See `test_compare_klu.jl` for the rationale behind `STRICT_FP` / `USE_FMA`.
+const STRICT_FP = Sys.islinux() && Sys.ARCH === :x86_64
+const USE_FMA = !STRICT_FP
+strict_eq(a, b) = STRICT_FP ? a == b : isapprox(a, b)
 
 # Pull the not-exported BTF/AMD modules so we can hit the internals.
 const PKBTF = PureKLU.BTF
