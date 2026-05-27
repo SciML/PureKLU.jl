@@ -20,8 +20,8 @@ import KLU
 import AMD as SuiteSparseAMD
 
 # See `test_compare_klu.jl` for the rationale behind `STRICT_FP` / `USE_FMA`.
+const USE_FMA = Sys.ARCH === :aarch64
 const STRICT_FP = Sys.islinux() && Sys.ARCH === :x86_64
-const USE_FMA = !STRICT_FP
 strict_eq(a, b) = STRICT_FP ? a == b : isapprox(a, b)
 
 # Pull the not-exported BTF/AMD modules so we can hit the internals.

@@ -16,19 +16,22 @@ import KLU
 
 const SUITESPARSE = KLU
 
-# `STRICT_FP` is true on x86_64-{linux,windows}, the platforms whose
-# `SuiteSparse_jll` `libklu` binary is built SSE2-only (no FMA emission).
-# On those platforms PureKLU bit-matches the reference with `use_fma=false`.
-# On aarch64-apple-darwin (ARMv8 baseline includes FMA) the same C source
-# is compiled with `fmsub` in the hot loops, and PureKLU bit-matches it
-# instead with `use_fma=true` (verified by disassembly + experiment).
-# `USE_FMA` is the FMA mode that yields real-Float64 bit-equality on the
-# current platform; the real testsets thread it through. Complex tests
-# can't reach bit-equality on macOS (different `_cdiv`/`_ssabs` algorithms
-# from SuiteSparse), so they use `use_fma=false` and the looser
-# `strict_eq` fallback below.
+# `USE_FMA` is the FMA mode that makes PureKLU bit-match the
+# `SuiteSparse_jll` `libklu` binary on the current platform's
+# architecture:
+#   - x86_64 ({linux,windows,darwin}): BinaryBuilder SSE2-only baseline,
+#     no FMA emission -> `use_fma=false`.
+#   - aarch64 (darwin, linux): ARMv8 baseline includes FMA -> `use_fma=true`
+#     (verified by `otool -tv libklu.dylib` showing `fmsub` in hot loops).
+# Real-Float64 testsets thread `use_fma=USE_FMA` so bit-equality holds on
+# every platform.
+#
+# `STRICT_FP` gates the *complex* tests' bit-equality check. Complex
+# bit-equality requires both the FMA mode to match and PureKLU's
+# `_cdiv`/`_ssabs` to mirror SuiteSparse exactly -- only x86_64-linux is
+# known-good. Elsewhere, complex tests fall back to `isapprox`.
+const USE_FMA = Sys.ARCH === :aarch64
 const STRICT_FP = Sys.islinux() && Sys.ARCH === :x86_64
-const USE_FMA = !STRICT_FP
 strict_eq(a, b) = STRICT_FP ? a == b : isapprox(a, b)
 
 """
