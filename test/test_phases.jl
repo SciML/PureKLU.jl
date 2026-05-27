@@ -19,6 +19,18 @@ using Random
 import KLU
 import AMD as SuiteSparseAMD
 
+# `strict_eq` is also defined in `test_compare_klu.jl` (loaded earlier by
+# `runtests.jl`).  Define it again here, locally, so this file can also be
+# run standalone (e.g. `julia --project=. test/test_phases.jl`).  On
+# x86_64-Linux we match SuiteSparse's `libklu.so` (SSE2-only, no FMA)
+# bit-for-bit; on every other platform the SuiteSparse C compiler may
+# emit FMA -- aarch64-darwin in particular has FMA in the ARMv8 ISA
+# baseline -- so we accept a tight `isapprox` with rtol = 4 * eps().
+if !isdefined(@__MODULE__, :STRICT_FP)
+    const STRICT_FP = Sys.islinux() && Sys.ARCH === :x86_64
+    strict_eq(a, b) = STRICT_FP ? a == b : isapprox(a, b; rtol = 4 * eps(Float64))
+end
+
 # Pull the not-exported BTF/AMD modules so we can hit the internals.
 const PKBTF = PureKLU.BTF
 const PKAMD = PureKLU.AMD
@@ -240,10 +252,10 @@ function strict_match_all(A::SparseMatrixCSC)
     @test K_ref.p == K_pj.p
     @test K_ref.q == K_pj.q
     @test K_ref.R == K_pj.R
-    @test K_ref.Rs == K_pj.Rs
-    @test K_ref.L == K_pj.L
-    @test K_ref.U == K_pj.U
-    @test K_ref.F == K_pj.F
+    @test strict_eq(K_ref.Rs, K_pj.Rs)
+    @test strict_eq(K_ref.L, K_pj.L)
+    @test strict_eq(K_ref.U, K_pj.U)
+    @test strict_eq(K_ref.F, K_pj.F)
 end
 
 # ---------- sparse matrix zoo: structure variety ---------------------------
@@ -395,16 +407,16 @@ end
         B = sparse(I_idx, J_idx, V2, n, n)
         K_ref = KLU.klu(A); KLU.klu!(K_ref, B)
         K_pj  = PureKLU.klu(A; use_fma=false); PureKLU.klu!(K_pj, B)
-        @test K_ref.L == K_pj.L
-        @test K_ref.U == K_pj.U
-        @test K_ref.F == K_pj.F
-        @test K_ref.Rs == K_pj.Rs
+        @test strict_eq(K_ref.L, K_pj.L)
+        @test strict_eq(K_ref.U, K_pj.U)
+        @test strict_eq(K_ref.F, K_pj.F)
+        @test strict_eq(K_ref.Rs, K_pj.Rs)
         # refactor with just nzval
         K_ref2 = KLU.klu(A); KLU.klu!(K_ref2, B.nzval)
         K_pj2  = PureKLU.klu(A; use_fma=false); PureKLU.klu!(K_pj2, B.nzval)
-        @test K_ref2.L == K_pj2.L
-        @test K_ref2.U == K_pj2.U
-        @test K_ref2.F == K_pj2.F
+        @test strict_eq(K_ref2.L, K_pj2.L)
+        @test strict_eq(K_ref2.U, K_pj2.U)
+        @test strict_eq(K_ref2.F, K_pj2.F)
     end
 end
 
@@ -423,8 +435,8 @@ end
         PureKLU.klu_factor!(K_pj)
         @test K_ref.p == K_pj.p
         @test K_ref.q == K_pj.q
-        @test K_ref.L == K_pj.L
-        @test K_ref.U == K_pj.U
+        @test strict_eq(K_ref.L, K_pj.L)
+        @test strict_eq(K_ref.U, K_pj.U)
         b = randn(n)
         @test K_ref \ b ≈ K_pj \ b
     end
@@ -528,12 +540,12 @@ end
         B = sparse(I_idx, J_idx, V, n, n)
         KLU.klu!(K_ref, B)
         PureKLU.klu!(K_pj, B)
-        @test K_ref.L == K_pj.L
-        @test K_ref.U == K_pj.U
-        @test K_ref.F == K_pj.F
-        @test K_ref.Rs == K_pj.Rs
+        @test strict_eq(K_ref.L, K_pj.L)
+        @test strict_eq(K_ref.U, K_pj.U)
+        @test strict_eq(K_ref.F, K_pj.F)
+        @test strict_eq(K_ref.Rs, K_pj.Rs)
         b = randn(n)
-        @test K_ref \ b == K_pj \ b
+        @test strict_eq(K_ref \ b, K_pj \ b)
     end
 end
 
@@ -591,8 +603,8 @@ end
     KLU.klu_factor!(K_ref); PureKLU.klu_factor!(K_pj)
     @test K_ref.p == K_pj.p
     @test K_ref.q == K_pj.q
-    @test K_ref.L == K_pj.L
-    @test K_ref.U == K_pj.U
+    @test strict_eq(K_ref.L, K_pj.L)
+    @test strict_eq(K_ref.U, K_pj.U)
 end
 
 # ---------- 1×1 / 2×2 degenerate matrices ----------------------------------
@@ -603,7 +615,7 @@ end
     K_ref = KLU.klu(A1); K_pj = PureKLU.klu(A1; use_fma=false)
     @test K_ref.p == K_pj.p
     @test K_ref.q == K_pj.q
-    @test K_ref.U == K_pj.U
+    @test strict_eq(K_ref.U, K_pj.U)
     @test K_ref \ [6.0] == K_pj \ [6.0]
 
     # 2x2 various
@@ -617,8 +629,8 @@ end
         K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma=false)
         @test K_ref.p == K_pj.p
         @test K_ref.q == K_pj.q
-        @test K_ref.L == K_pj.L
-        @test K_ref.U == K_pj.U
+        @test strict_eq(K_ref.L, K_pj.L)
+        @test strict_eq(K_ref.U, K_pj.U)
     end
 end
 
