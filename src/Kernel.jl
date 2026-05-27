@@ -412,13 +412,18 @@ function _kernel_lsolve_numeric!(Pinv::Vector{Ti},
                                  Stack::Vector{Ti}, Lip::AbstractVector{Ti},
                                  top::Int, n::Int, Llen::AbstractVector{Ti},
                                  X::Vector{Tv}, fma_val::Val) where {Tv, Ti}
-    for s in top:(n-1)
+    @inbounds for s in top:(n-1)
         j = Int(Stack[s+1])
         jnew = Int(Pinv[j+1])
         xj = X[j+1]
         lip = Int(Lip[jnew+1])
         len = Int(Llen[jnew+1])
-        @inbounds for p in 0:(len-1)
+        # `block_Li[lip..lip+len-1]` are the row indices for one column of L,
+        # which are pairwise distinct by construction (sparse LU never inserts
+        # a row twice into a column).  The compiler can't see that, so we
+        # promise it via `@simd ivdep` -- the scatter `X[i] -= ...` has no
+        # loop-carried memory dependency.
+        @simd ivdep for p in 0:(len-1)
             i = Int(block_Li[lip+p+1])
             X[i+1] = _mulsub(X[i+1], block_Lx[lip+p+1], xj, fma_val)
         end
@@ -508,7 +513,10 @@ function _kernel_lpivot!(diagrow::Int, k::Int, n::Int,
     end
 
     new_len = Int(Llen[k+1])
-    @inbounds for p in 0:(new_len-1)
+    # Scaling pass: each entry is divided by the same pivot, no cross-iteration
+    # dependency.  `@simd ivdep` is safe because the writes are to consecutive
+    # storage locations.
+    @inbounds @simd ivdep for p in 0:(new_len-1)
         block_Lx[lip+p+1] = _cdiv(block_Lx[lip+p+1], pivot, fma_val)
     end
 
@@ -668,11 +676,13 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
         unz += ulen + 1
     end
 
-    # Remap L row indices using the final Pinv
+    # Remap L row indices using the final Pinv.  Each iteration updates a
+    # distinct slot in block.Li (consecutive `p` values), so the writes
+    # don't alias the reads in a later iteration.  Safe to vectorise.
     @inbounds for k in 0:(n-1)
         lip_k = Int(Lip[k+1])
         llen_k = Int(Llen[k+1])
-        for p in 0:(llen_k-1)
+        @simd ivdep for p in 0:(llen_k-1)
             block.Li[lip_k+p+1] = Ti(wk.Pinv[Int(block.Li[lip_k+p+1])+1])
         end
     end

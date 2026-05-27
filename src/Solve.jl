@@ -69,7 +69,11 @@ function _klu_solve_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti},
             if block > 1
                 @inbounds for k in k1:(k2-1)
                     xk = X[k+1]
-                    for p in Int(Offp[k+1]):(Int(Offp[k+2])-1)
+                    pstart = Int(Offp[k+1])
+                    pend   = Int(Offp[k+2]) - 1
+                    # Offi entries are distinct per column of F (sparse CSC
+                    # with no duplicate rows), so the scatter is alias-free.
+                    @simd ivdep for p in pstart:pend
                         X[Int(Offi[p+1])+1] = _mulsub(X[Int(Offi[p+1])+1],
                                                      Offx[p+1], xk, fma_val)
                     end
@@ -92,7 +96,9 @@ function _klu_lsolve!(n::Int, Lip::AbstractVector{Ti}, Llen::AbstractVector{Ti},
         xk = X[k+1]
         lip = Int(Lip[k+1])
         len = Int(Llen[k+1])
-        for p in 0:(len-1)
+        # Row indices block.Li[lip+1..lip+len] are pairwise distinct per
+        # column (no duplicates in sparse LU storage), so `ivdep` is safe.
+        @simd ivdep for p in 0:(len-1)
             i = Int(block.Li[lip+p+1])
             X[i+1] = _mulsub(X[i+1], block.Lx[lip+p+1], xk, fma_val)
         end
@@ -107,7 +113,8 @@ function _klu_usolve!(n::Int, Uip::AbstractVector{Ti}, Ulen::AbstractVector{Ti},
         len = Int(Ulen[k+1])
         xk = _cdiv(X[k+1], Udiag[k+1], fma_val)
         X[k+1] = xk
-        for p in 0:(len-1)
+        # Same as in _klu_lsolve!: distinct row indices, safe to vectorise.
+        @simd ivdep for p in 0:(len-1)
             i = Int(block.Ui[uip+p+1])
             X[i+1] = _mulsub(X[i+1], block.Ux[uip+p+1], xk, fma_val)
         end
@@ -164,9 +171,14 @@ function _klu_tsolve_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti},
 
             if block > 1
                 @inbounds for k in k1:(k2-1)
-                    pend = Int(Offp[k+2])
+                    pstart = Int(Offp[k+1])
+                    pend   = Int(Offp[k+2]) - 1
                     acc = X[k+1]
-                    for p in Int(Offp[k+1]):(pend-1)
+                    # Reduction over `acc`.  `@simd` lets the compiler split
+                    # this into multiple partial accumulators and recombine,
+                    # breaking the serial FMA dependency chain that otherwise
+                    # makes tsolve slower with `use_fma=Val(true)`.
+                    @simd for p in pstart:pend
                         offik = Offx[p+1]
                         if conj_solve
                             offik = conj(offik)
@@ -213,7 +225,10 @@ function _klu_ltsolve!(n::Int, Lip::AbstractVector{Ti}, Llen::AbstractVector{Ti}
         lip = Int(Lip[k+1])
         len = Int(Llen[k+1])
         acc = X[k+1]
-        for p in 0:(len-1)
+        # Inner reduction into `acc`.  `@simd` permits reassociation so the
+        # compiler can vectorise (multiple partial accumulators) and break
+        # the serial FMA dependency.  See SciML/PureKLU.jl#1 for context.
+        @simd for p in 0:(len-1)
             lik = block.Lx[lip+p+1]
             if conj_solve
                 lik = conj(lik)
@@ -232,7 +247,7 @@ function _klu_utsolve!(n::Int, Uip::AbstractVector{Ti}, Ulen::AbstractVector{Ti}
         uip = Int(Uip[k+1])
         len = Int(Ulen[k+1])
         acc = X[k+1]
-        for p in 0:(len-1)
+        @simd for p in 0:(len-1)
             uik = block.Ux[uip+p+1]
             if conj_solve
                 uik = conj(uik)
@@ -407,7 +422,9 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti},
                     bk.Ux[uip+up+1] = ujk
                     lip_j = Int(Lip_b[j+1])
                     llen_j = Int(Llen_b[j+1])
-                    @inbounds for p in 0:(llen_j-1)
+                    # Same scatter pattern as the factor / forward solve:
+                    # distinct row indices per column, alias-free.
+                    @inbounds @simd ivdep for p in 0:(llen_j-1)
                         ii = Int(bk.Li[lip_j+p+1])
                         X[ii+1] = _mulsub(X[ii+1], bk.Lx[lip_j+p+1], ujk, fma_val)
                     end
