@@ -123,6 +123,7 @@ end
 include(joinpath(@__DIR__, "test_compare_klu.jl"))
 include(joinpath(@__DIR__, "test_phases.jl"))
 include(joinpath(@__DIR__, "test_fma_on.jl"))
+include(joinpath(@__DIR__, "test_allocations.jl"))
 
 @testset "full_factor = false" begin
     for T in (Float64, ComplexF64, Float32, ComplexF32)

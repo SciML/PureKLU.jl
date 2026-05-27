@@ -134,12 +134,22 @@ mutable struct KLUNumeric{Tv, Ti<:Integer}
     Offi::Vector{Ti}
     Offx::Vector{Tv}
     nzoff::Ti
+    # Preallocated length-`n` solve workspace; lets `klu_solve!`,
+    # `klu_tsolve!` and `klu_refactor!` avoid per-call `Vector{Tv}` heap
+    # allocations.  Owned by the numeric struct, so its lifetime matches
+    # the factorisation.
+    Xwork::Vector{Tv}
+    # Length-`n` Float64 scratch used by the row-scale permutation pass
+    # at the tail of factor / refactor (`Rs[k] = Rs[Pnum[k]]` shuffle).
+    # Allocated only when `common.scale > 0`; empty otherwise.
+    Xtmp::Vector{Float64}
 end
 
 function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti}) where {Tv, Ti}
     n = Int(Sym.n)
     nblocks = Int(Sym.nblocks)
     nzoff = Int(Sym.nzoff)
+    scale = Int(common.scale)
     Num = KLUNumeric{Tv, Ti}(
         Sym.n, Sym.nblocks, Ti(0), Ti(0), Ti(1), Ti(1),
         Vector{Ti}(undef, n),
@@ -150,11 +160,13 @@ function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti})
         Vector{Ti}(undef, n),
         KLUNumericBlock{Tv, Ti}[KLUNumericBlock{Tv, Ti}() for _ in 1:nblocks],
         Vector{Tv}(undef, n),
-        common.scale > 0 ? zeros(Float64, n) : Float64[],
+        scale > 0 ? zeros(Float64, n) : Float64[],
         zeros(Ti, n + 1),
         Vector{Ti}(undef, max(nzoff, 0)),
         Vector{Tv}(undef, max(nzoff, 0)),
         Sym.nzoff,
+        Vector{Tv}(undef, n),
+        scale > 0 ? Vector{Float64}(undef, n) : Float64[],
     )
     return Num
 end
@@ -865,7 +877,10 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
     end
 
     if scale > 0
-        Xtmp = Vector{Float64}(undef, n)
+        # `Num.Xtmp` is preallocated to length `n` at factor time when
+        # scale > 0; reuse it for the Rs permutation shuffle instead of
+        # allocating fresh.
+        Xtmp = Num.Xtmp
         @inbounds for k in 1:n
             Xtmp[k] = Num.Rs[Int(Num.Pnum[k])+1]
         end
