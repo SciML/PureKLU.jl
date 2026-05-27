@@ -25,10 +25,13 @@ import AMD as SuiteSparseAMD
 # x86_64-Linux we match SuiteSparse's `libklu.so` (SSE2-only, no FMA)
 # bit-for-bit; on every other platform the SuiteSparse C compiler may
 # emit FMA -- aarch64-darwin in particular has FMA in the ARMv8 ISA
-# baseline -- so we accept a tight `isapprox` with rtol = 4 * eps().
+# baseline -- and the per-op rounding divergence compounds through LU,
+# producing thousands of ULPs of drift on n>=20 random sparse matrices.
+# Fall back to Julia's default `isapprox` tolerance (rtol = sqrt(eps),
+# matching the `≈` comparisons used elsewhere in this file).
 if !isdefined(@__MODULE__, :STRICT_FP)
     const STRICT_FP = Sys.islinux() && Sys.ARCH === :x86_64
-    strict_eq(a, b) = STRICT_FP ? a == b : isapprox(a, b; rtol = 4 * eps(Float64))
+    strict_eq(a, b) = STRICT_FP ? a == b : isapprox(a, b)
 end
 
 # Pull the not-exported BTF/AMD modules so we can hit the internals.

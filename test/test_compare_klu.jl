@@ -20,11 +20,12 @@ const SUITESPARSE = KLU
 # guarantee on x86_64-linux, the platform whose SSE2-baseline binary the
 # `use_fma=false` path is calibrated against. On other platforms (notably
 # aarch64-apple-darwin, where the SuiteSparse binary is built with FMA
-# enabled as part of the ARMv8 baseline), the reference takes a slightly
-# different rounding path on complex arithmetic, so we fall back to a very
-# tight ULP-level `isapprox` on those platforms only.
+# enabled as part of the ARMv8 baseline), the reference takes a different
+# rounding path per multiply-subtract; for full LU factorisations this
+# compounds to many ULPs of drift, so we fall back to Julia's default
+# `isapprox` tolerance (rtol = sqrt(eps)) on those platforms only.
 const STRICT_FP = Sys.islinux() && Sys.ARCH === :x86_64
-strict_eq(a, b) = STRICT_FP ? a == b : isapprox(a, b; rtol = 4 * eps(Float64))
+strict_eq(a, b) = STRICT_FP ? a == b : isapprox(a, b)
 
 """
     compare_strict(A)
