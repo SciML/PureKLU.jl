@@ -39,7 +39,11 @@ function _klu_solve_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti},
     Rs = Num.Rs
     scaled = !isempty(Rs)
 
-    X = Vector{Tv}(undef, n)
+    # `Num.Xwork` is preallocated to length `n` at factor time, so
+    # `klu_solve!` is heap-allocation-free on subsequent calls. Every
+    # element is overwritten before being read (`X[k+1] = B[...]`), so
+    # we don't need to clear it.
+    X = Num.Xwork
     for col in 1:nrhs
         # X = P * (R \ B[:, col]) -- gather permuted+scaled RHS
         if scaled
@@ -158,7 +162,9 @@ function _klu_tsolve_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti},
     Rs = Num.Rs
     scaled = !isempty(Rs)
 
-    X = Vector{Tv}(undef, n)
+    # See `_klu_solve_impl!`: reuse the per-numeric solve workspace
+    # instead of allocating a fresh `Vector{Tv}(undef, n)` each call.
+    X = Num.Xwork
     for col in 1:nrhs
         @inbounds for k in 0:(n-1)
             X[k+1] = B[Int(Q[k+1])+1, col]
@@ -357,7 +363,15 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti},
         end
     end
 
-    X = zeros(Tv, maxblock)
+    # Refactor only touches the first `maxblock` entries of `X`, and
+    # the algorithm restores each column's scratch positions to zero
+    # before moving on -- so we only need to ensure the working prefix
+    # starts at zero on entry, and the workspace can be shared with
+    # `klu_solve!` via `Num.Xwork` (length `n >= maxblock`).
+    X = Num.Xwork
+    @inbounds for k in 1:maxblock
+        X[k] = zero(Tv)
+    end
     poff = 0
     nzoff = Int(Sym.nzoff)
 
@@ -454,7 +468,9 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti},
     end
 
     if scale > 0
-        Xt = Vector{Float64}(undef, n)
+        # `Num.Xtmp` is preallocated to length `n` at factor time when
+        # scale > 0; reuse it for the Rs permutation shuffle.
+        Xt = Num.Xtmp
         @inbounds for k in 1:n
             Xt[k] = Rs[Int(Pnum[k])+1]
         end
