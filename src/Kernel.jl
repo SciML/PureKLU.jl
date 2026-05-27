@@ -266,22 +266,27 @@ KernelWorkspace{Tv, Ti}(n::Integer) where {Tv, Ti} = KernelWorkspace{Tv, Ti}(
 
 # DFS for the symbolic Lsolve; ports klu_kernel.c::dfs.  Writes new L row
 # indices for column k into `block_Li` at offsets `Lip[k+1]+1 .. Lip[k+1]+l_length`.
-function _kernel_dfs!(j_in::Int, k::Int,
+# Returns `(top, l_length)` rather than mutating a Ref so the compiler can
+# keep `l_length` in a register across the inlined call boundary.
+@inline function _kernel_dfs!(j_in::Int, k::Int,
                       Pinv::Vector{Ti}, Llen::AbstractVector{Ti}, Lip::AbstractVector{Ti},
                       Stack::Vector{Ti}, Flag::Vector{Ti}, Lpend::Vector{Ti},
                       top_in::Int,
                       block_Li::Vector{Ti}, Lip_k::Int,
-                      l_length_ref::Ref{Int},
+                      l_length::Int,
                       Ap_pos::Vector{Ti}) where {Ti}
     head = 0
-    Stack[1] = Ti(j_in)
+    @inbounds Stack[1] = Ti(j_in)
     top = top_in
-    while head >= 0
+    kT = Ti(k)
+    emptyT = Ti(EMPTY)
+    @inbounds while head >= 0
         j = Int(Stack[head+1])
         jnew = Int(Pinv[j+1])
-        if Flag[j+1] != Ti(k)
-            Flag[j+1] = Ti(k)
-            Ap_pos[head+1] = (Lpend[jnew+1] == Ti(EMPTY)) ? Llen[jnew+1] : Lpend[jnew+1]
+        if Flag[j+1] != kT
+            Flag[j+1] = kT
+            lp = Lpend[jnew+1]
+            Ap_pos[head+1] = (lp == emptyT) ? Llen[jnew+1] : lp
         end
         lip_jnew = Int(Lip[jnew+1])
         Ap_pos[head+1] -= Ti(1)
@@ -289,7 +294,7 @@ function _kernel_dfs!(j_in::Int, k::Int,
         broke = false
         while pos >= 0
             i = Int(block_Li[lip_jnew + pos + 1])
-            if Flag[i+1] != Ti(k)
+            if Flag[i+1] != kT
                 if Pinv[i+1] >= 0
                     Ap_pos[head+1] = Ti(pos)
                     head += 1
@@ -297,9 +302,9 @@ function _kernel_dfs!(j_in::Int, k::Int,
                     broke = true
                     break
                 else
-                    Flag[i+1] = Ti(k)
-                    block_Li[Lip_k + l_length_ref[] + 1] = Ti(i)
-                    l_length_ref[] += 1
+                    Flag[i+1] = kT
+                    block_Li[Lip_k + l_length + 1] = Ti(i)
+                    l_length += 1
                 end
             end
             pos -= 1
@@ -310,7 +315,7 @@ function _kernel_dfs!(j_in::Int, k::Int,
             Stack[top+1] = Ti(j)
         end
     end
-    return top
+    return top, l_length
 end
 
 # Port of klu_kernel.c::lsolve_symbolic
@@ -323,28 +328,30 @@ function _kernel_lsolve_symbolic!(n::Int, k::Int,
                                   Llen::AbstractVector{Ti}, Lip::AbstractVector{Ti},
                                   k1::Int, PSinv::Vector{Ti}) where {Ti}
     top = n
-    l_length_ref = Ref(0)
+    l_length = 0
     kglobal = k + k1
-    Lip_k = Int(Lip[k+1])
-    oldcol = Int(Q[kglobal+1])
-    pend = Int(Ap[oldcol+2])
-    for p in Int(Ap[oldcol+1]):(pend-1)
+    @inbounds Lip_k = Int(Lip[k+1])
+    @inbounds oldcol = Int(Q[kglobal+1])
+    @inbounds pend = Int(Ap[oldcol+2])
+    @inbounds pstart = Int(Ap[oldcol+1])
+    kT = Ti(k)
+    @inbounds for p in pstart:(pend-1)
         i = Int(PSinv[Int(Ai[p+1])+1]) - k1
         if i < 0
             continue
         end
-        if Flag[i+1] != Ti(k)
+        if Flag[i+1] != kT
             if Pinv[i+1] >= 0
-                top = _kernel_dfs!(i, k, Pinv, Llen, Lip, Stack, Flag, Lpend,
-                                   top, block_Li, Lip_k, l_length_ref, Ap_pos)
+                top, l_length = _kernel_dfs!(i, k, Pinv, Llen, Lip, Stack, Flag, Lpend,
+                                             top, block_Li, Lip_k, l_length, Ap_pos)
             else
-                Flag[i+1] = Ti(k)
-                block_Li[Lip_k + l_length_ref[] + 1] = Ti(i)
-                l_length_ref[] += 1
+                Flag[i+1] = kT
+                block_Li[Lip_k + l_length + 1] = Ti(i)
+                l_length += 1
             end
         end
     end
-    Llen[k+1] = Ti(l_length_ref[])
+    @inbounds Llen[k+1] = Ti(l_length)
     return top
 end
 
@@ -356,11 +363,12 @@ function _kernel_construct_column!(k::Int, Ap::Vector{Ti}, Ai::Vector{Ti},
                                    Offp::Vector{Ti}, Offi::Vector{Ti},
                                    Offx::Vector{Tv}) where {Tv, Ti}
     kglobal = k + k1
-    poff = Int(Offp[kglobal+1])
-    oldcol = Int(Q[kglobal+1])
-    pend = Int(Ap[oldcol+2])
+    @inbounds poff = Int(Offp[kglobal+1])
+    @inbounds oldcol = Int(Q[kglobal+1])
+    @inbounds pend = Int(Ap[oldcol+2])
+    @inbounds pstart = Int(Ap[oldcol+1])
     if scale <= 0
-        for p in Int(Ap[oldcol+1]):(pend-1)
+        @inbounds for p in pstart:(pend-1)
             oldrow = Int(Ai[p+1])
             i = Int(PSinv[oldrow+1]) - k1
             aik = Ax[p+1]
@@ -373,7 +381,7 @@ function _kernel_construct_column!(k::Int, Ap::Vector{Ti}, Ai::Vector{Ti},
             end
         end
     else
-        for p in Int(Ap[oldcol+1]):(pend-1)
+        @inbounds for p in pstart:(pend-1)
             oldrow = Int(Ai[p+1])
             i = Int(PSinv[oldrow+1]) - k1
             aik = Ax[p+1] / Rs[oldrow+1]
@@ -386,7 +394,7 @@ function _kernel_construct_column!(k::Int, Ap::Vector{Ti}, Ai::Vector{Ti},
             end
         end
     end
-    Offp[kglobal+2] = Ti(poff)
+    @inbounds Offp[kglobal+2] = Ti(poff)
 end
 
 # Port of klu_kernel.c::lsolve_numeric.
@@ -454,22 +462,21 @@ function _kernel_lpivot!(diagrow::Int, k::Int, n::Int,
     pdiag = -1
     ppivrow = -1
     abs_pivot = -1.0
-    lip = Int(Lip[k+1])
-    len_full = Int(Llen[k+1])
-    last_row_index = Int(block_Li[lip + len_full])
+    @inbounds lip = Int(Lip[k+1])
+    @inbounds len_full = Int(Llen[k+1])
+    @inbounds last_row_index = Int(block_Li[lip + len_full])
 
-    Llen[k+1] = Ti(len_full - 1)
+    @inbounds Llen[k+1] = Ti(len_full - 1)
     len = len_full - 1
+    diagrowT = Ti(diagrow)
 
     @inbounds for p in 0:(len-1)
-        i = Int(block_Li[lip+p+1])
-        x = X[i+1]
-        X[i+1] = zero(Tv)
+        i = block_Li[lip+p+1]
+        x = X[Int(i)+1]
+        X[Int(i)+1] = zero(Tv)
         block_Lx[lip+p+1] = x
         xabs = abs(x)
-        if i == diagrow
-            pdiag = p
-        end
+        pdiag = ifelse(i == diagrowT, p, pdiag)
         if xabs > abs_pivot
             abs_pivot = xabs
             ppivrow = p
@@ -512,11 +519,10 @@ function _kernel_lpivot!(diagrow::Int, k::Int, n::Int,
         return false, pivrow, pivot, abs_pivot
     end
 
-    new_len = Int(Llen[k+1])
     # Scaling pass: each entry is divided by the same pivot, no cross-iteration
     # dependency.  `@simd ivdep` is safe because the writes are to consecutive
-    # storage locations.
-    @inbounds @simd ivdep for p in 0:(new_len-1)
+    # storage locations.  `len` equals the post-decrement `Llen[k+1]`.
+    @inbounds @simd ivdep for p in 0:(len-1)
         block_Lx[lip+p+1] = _cdiv(block_Lx[lip+p+1], pivot, fma_val)
     end
 
@@ -529,16 +535,18 @@ function _kernel_prune!(Lpend::Vector{Ti}, Pinv::Vector{Ti}, k::Int, pivrow::Int
                         block_Ui::Vector{Ti},
                         Uip::AbstractVector{Ti}, Lip::AbstractVector{Ti},
                         Ulen::AbstractVector{Ti}, Llen::AbstractVector{Ti}) where {Tv, Ti}
-    uip_k = Int(Uip[k+1])
-    ulen_k = Int(Ulen[k+1])
+    @inbounds uip_k = Int(Uip[k+1])
+    @inbounds ulen_k = Int(Ulen[k+1])
+    emptyT = Ti(EMPTY)
+    pivrowT = Ti(pivrow)
     @inbounds for p in 0:(ulen_k-1)
         j = Int(block_Ui[uip_k+p+1])
-        if Lpend[j+1] == Ti(EMPTY)
+        if Lpend[j+1] == emptyT
             lip_j = Int(Lip[j+1])
             llen_j = Int(Llen[j+1])
             found = -1
             for p2 in 0:(llen_j-1)
-                if pivrow == Int(block_Li[lip_j+p2+1])
+                if block_Li[lip_j+p2+1] == pivrowT
                     found = p2
                     break
                 end
@@ -547,13 +555,13 @@ function _kernel_prune!(Lpend::Vector{Ti}, Pinv::Vector{Ti}, k::Int, pivrow::Int
                 phead = 0
                 ptail = llen_j
                 while phead < ptail
-                    i = Int(block_Li[lip_j+phead+1])
-                    if Pinv[i+1] >= 0
+                    i = block_Li[lip_j+phead+1]
+                    if Pinv[Int(i)+1] >= 0
                         phead += 1
                     else
                         ptail -= 1
                         block_Li[lip_j+phead+1] = block_Li[lip_j+ptail+1]
-                        block_Li[lip_j+ptail+1] = Ti(i)
+                        block_Li[lip_j+ptail+1] = i
                         x = block_Lx[lip_j+phead+1]
                         block_Lx[lip_j+phead+1] = block_Lx[lip_j+ptail+1]
                         block_Lx[lip_j+ptail+1] = x
@@ -602,6 +610,13 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
 
     resize!(block.Li, 0); resize!(block.Lx, 0)
     resize!(block.Ui, 0); resize!(block.Ux, 0)
+    # Pre-grow capacity so per-column resize!(., old_len + n) grows in place
+    # most of the time and amortised reallocs disappear from the hot path.
+    cap_hint = 16 * n
+    sizehint!(block.Li, cap_hint)
+    sizehint!(block.Lx, cap_hint)
+    sizehint!(block.Ui, cap_hint)
+    sizehint!(block.Ux, cap_hint)
 
     lnz = 0
     unz = 0
@@ -609,8 +624,8 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
 
     for k in 0:(n-1)
         # Reserve n slots for column k's L pattern in block.Li/Lx
-        Lip[k+1] = Ti(length(block.Li))
         old_len = length(block.Li)
+        @inbounds Lip[k+1] = Ti(old_len)
         resize!(block.Li, old_len + n)
         resize!(block.Lx, old_len + n)
 
@@ -623,7 +638,7 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
         _kernel_lsolve_numeric!(wk.Pinv, block.Li, block.Lx, wk.Stack, Lip,
                                 top, n, Llen, wk.X, fma_val)
 
-        diagrow = Int(Pblock[k+1])
+        @inbounds diagrow = Int(Pblock[k+1])
         ok, pivrow, pivot, _ = _kernel_lpivot!(diagrow, k, n, tol, wk.X,
                                                block.Li, block.Lx, Lip, Llen,
                                                wk.Pinv, firstrow_ref, common,
@@ -632,7 +647,7 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
             common.status = Cint(KLU_SINGULAR)
             if common.numerical_rank == Ti(EMPTY)
                 common.numerical_rank = Ti(k + k1)
-                common.singular_col = Q[k + k1 + 1]
+                @inbounds common.singular_col = Q[k + k1 + 1]
             end
             if common.halt_if_singular != 0
                 return lnz, unz
@@ -640,19 +655,23 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
         end
 
         # Shrink L storage back to just the entries used
-        lip_k = Int(Lip[k+1])
-        llen_k = Int(Llen[k+1])
+        @inbounds lip_k = Int(Lip[k+1])
+        @inbounds llen_k = Int(Llen[k+1])
         resize!(block.Li, lip_k + llen_k)
         resize!(block.Lx, lip_k + llen_k)
 
         # Build U for this column from Stack[top..n-1] and X
-        Uip[k+1] = Ti(length(block.Ui))
+        u_off = length(block.Ui)
+        @inbounds Uip[k+1] = Ti(u_off)
         ulen = n - top
-        Ulen[k+1] = Ti(ulen)
-        for s in top:(n-1)
+        @inbounds Ulen[k+1] = Ti(ulen)
+        resize!(block.Ui, u_off + ulen)
+        resize!(block.Ux, u_off + ulen)
+        @inbounds for s in top:(n-1)
             j = Int(wk.Stack[s+1])
-            push!(block.Ui, wk.Pinv[j+1])
-            push!(block.Ux, wk.X[j+1])
+            idx = u_off + (s - top) + 1
+            block.Ui[idx] = wk.Pinv[j+1]
+            block.Ux[idx] = wk.X[j+1]
             wk.X[j+1] = zero(Tv)
         end
 
