@@ -1,3 +1,10 @@
+# Direct Julia port of SuiteSparse/KLU/Source/klu.c (solve / tsolve),
+# klu_refactor.c, klu_sort.c.
+# Upstream: KLU, Copyright (c) 2004-2025, University of Florida.
+# Authors:  Timothy A. Davis and Ekanathan Palamadai.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# See LICENSE for the full notice.
+
 # All multiply-subtract loops in this file dispatch on `Val(common.use_fma)`
 # via `_mulsub` (defined in `Kernel.jl`). The default `Val(true)` emits a
 # fused multiply-add on x86 with FMA. To match SuiteSparse `libklu.so`

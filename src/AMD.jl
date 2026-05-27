@@ -1,3 +1,11 @@
+# Direct Julia port of SuiteSparse/AMD/Source/amd_*.c
+# (amd_order, amd_aat, amd_1, amd_2, amd_postorder, amd_post_tree).
+# Upstream: AMD, Copyright (c) 1996-2025, Timothy A. Davis,
+#           Patrick R. Amestoy, and Iain S. Duff.
+# SPDX-License-Identifier: BSD-3-Clause
+# See LICENSE for the full notice; the upstream license text lives in
+# SuiteSparse/AMD/Doc/License.txt.
+
 """
     AMD
 

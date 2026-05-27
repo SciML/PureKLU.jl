@@ -1,3 +1,12 @@
+# Direct Julia port of SuiteSparse/KLU/Source/klu_kernel.c and the
+# allocation/factor driver pieces from SuiteSparse/KLU/Source/klu.c,
+# klu_factor.c, klu_scale.c.
+# Upstream: KLU, Copyright (c) 2004-2025, University of Florida.
+# Authors:  Timothy A. Davis and Ekanathan Palamadai.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# See LICENSE for the full notice; the upstream license text lives in
+# SuiteSparse/KLU/Doc/License.txt.
+
 # ----------------------------------------------------------------------
 # FMA toggle
 # ----------------------------------------------------------------------

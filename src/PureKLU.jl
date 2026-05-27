@@ -1,3 +1,12 @@
+# Direct Julia port of SuiteSparse/KLU.  This top-level module mirrors
+# the user-facing API exposed by `KLU.jl`; the algorithmic ports live in
+# the sibling source files (`BTF.jl`, `AMD.jl`, `Symbolic.jl`,
+# `Kernel.jl`, `Solve.jl`, `Common.jl`).
+# Upstream KLU: Copyright (c) 2004-2025, University of Florida.
+# Authors:      Timothy A. Davis and Ekanathan Palamadai.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# See LICENSE for the full notice.
+
 """
     PureKLU
 

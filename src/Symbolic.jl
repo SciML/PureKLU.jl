@@ -1,3 +1,10 @@
+# Direct Julia port of SuiteSparse/KLU/Source/klu_analyze.c and
+# klu_analyze_given.c.
+# Upstream: KLU, Copyright (c) 2004-2025, University of Florida.
+# Authors:  Timothy A. Davis and Ekanathan Palamadai.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# See LICENSE for the full notice.
+
 """
     KLUSymbolic{Ti}
 

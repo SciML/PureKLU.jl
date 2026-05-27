@@ -1,3 +1,10 @@
+# Direct Julia port of SuiteSparse/BTF.
+# Upstream: BTF, Copyright (c) 2004-2025, University of Florida.
+# Authors:  Timothy A. Davis.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# See LICENSE for the full notice; the upstream license text lives in
+# SuiteSparse/BTF/Doc/License.txt.
+
 """
     BTF
 
