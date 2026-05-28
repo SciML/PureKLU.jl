@@ -348,16 +348,16 @@ function _validate_pattern!(n::Integer,
                             W::Union{Vector{Ti},Nothing},
                             common::KLUCommon{Ti}) where {Ti}
     if n <= 0
-        common.status = Cint(KLU_INVALID)
+        common.status = KLU_INVALID
         return false
     end
     if Ap[1] != 0 || Ap[n+1] < 0
-        common.status = Cint(KLU_INVALID)
+        common.status = KLU_INVALID
         return false
     end
     for col in 1:n
         if Ap[col] > Ap[col+1]
-            common.status = Cint(KLU_INVALID)
+            common.status = KLU_INVALID
             return false
         end
     end
@@ -372,12 +372,12 @@ function _validate_pattern!(n::Integer,
         for p in (Int(Ap[col])+1):pend
             row = Int(Ai[p]) + 1
             if row < 1 || row > n
-                common.status = Cint(KLU_INVALID)
+                common.status = KLU_INVALID
                 return false
             end
             if check_duplicates
                 if W[row] == Ti(col - 1)
-                    common.status = Cint(KLU_INVALID)
+                    common.status = KLU_INVALID
                     return false
                 end
                 W[row] = Ti(col - 1)
@@ -400,19 +400,19 @@ function klu_scale!(scale::Integer, n::Integer,
                     W::Union{Vector{Ti},Nothing},
                     common::KLUCommon{Ti}) where {Tv, Ti}
     fma_val = common.use_fma
-    common.status = Cint(KLU_OK)
+    common.status = KLU_OK
     scale < 0 && return true
     if n <= 0 || (scale > 0 && Rs === nothing)
-        common.status = Cint(KLU_INVALID)
+        common.status = KLU_INVALID
         return false
     end
     if Ap[1] != 0 || Ap[n+1] < 0
-        common.status = Cint(KLU_INVALID)
+        common.status = KLU_INVALID
         return false
     end
     for col in 1:n
         if Ap[col] > Ap[col+1]
-            common.status = Cint(KLU_INVALID)
+            common.status = KLU_INVALID
             return false
         end
     end
@@ -434,12 +434,12 @@ function klu_scale!(scale::Integer, n::Integer,
         for p in (Int(Ap[col])+1):pend
             row = Int(Ai[p]) + 1
             if row < 1 || row > n
-                common.status = Cint(KLU_INVALID)
+                common.status = KLU_INVALID
                 return false
             end
             if check_duplicates
                 if W[row] == Ti(col - 1)
-                    common.status = Cint(KLU_INVALID)
+                    common.status = KLU_INVALID
                     return false
                 end
                 W[row] = Ti(col - 1)
@@ -856,7 +856,7 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
                                                wk.Pinv, firstrow_ref, common,
                                                fma_val)
         if !ok
-            common.status = Cint(KLU_SINGULAR)
+            common.status = KLU_SINGULAR
             if common.numerical_rank == Ti(EMPTY)
                 common.numerical_rank = Ti(k + k1)
                 @inbounds common.singular_col = Q[k + k1 + 1]
@@ -964,7 +964,7 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
                            reuse::KLUNumeric{Tv, Ti, Tr},
                            allowsingular::Bool,
                            scale_val::Val) where {Tv, Ti, Tr}
-    common.status = Cint(KLU_OK)
+    common.status = KLU_OK
     common.numerical_rank = Ti(EMPTY)
     common.singular_col = Ti(EMPTY)
     common.noffdiag = Ti(0)
@@ -1034,7 +1034,7 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
             end
             Num.Udiag[k1+1] = s
             if iszero(s)
-                common.status = Cint(KLU_SINGULAR)
+                common.status = KLU_SINGULAR
                 if common.numerical_rank == Ti(EMPTY)
                     common.numerical_rank = Ti(k1)
                     common.singular_col = Ti(oldcol)

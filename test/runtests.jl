@@ -55,7 +55,7 @@ using LinearAlgebra
             @inferred klua\fill(1, size(A, 2))
 
             @testset "Permutation vectors" begin
-                @test klu_analyze!(klua, klua.p, klua.q).common.status == 0
+                @test Int(klu_analyze!(klua, klua.p, klua.q).common.status) == 0
                 klu_factor!(klua)
                 x = klua \ b
                 @test A*x ≈ b

@@ -19,7 +19,7 @@ end
 function _klu_solve_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                           B::AbstractVecOrMat{Tv}, common::KLUCommon{Ti},
                           fma_val::Val) where {Tv, Ti, Tr}
-    common.status = Cint(KLU_OK)
+    common.status = KLU_OK
     n = Int(Sym.n)
     size(B, 1) == n || throw(DimensionMismatch())
     nrhs = size(B, 2)
@@ -142,7 +142,7 @@ function _klu_tsolve_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                            B::AbstractVecOrMat{Tv}, common::KLUCommon{Ti},
                            fma_val::Val;
                            conj_solve::Bool=false) where {Tv, Ti, Tr}
-    common.status = Cint(KLU_OK)
+    common.status = KLU_OK
     n = Int(Sym.n)
     size(B, 1) == n || throw(DimensionMismatch())
     nrhs = size(B, 2)
@@ -340,7 +340,7 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                              common::KLUCommon{Ti}, fma_val::Val,
                              scale_val::Val;
                              allowsingular::Bool=false) where {Tv, Ti, Tr}
-    common.status = Cint(KLU_OK)
+    common.status = KLU_OK
     common.numerical_rank = Ti(EMPTY)
     common.singular_col = Ti(EMPTY)
 
@@ -414,7 +414,7 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
             end
             @inbounds Udiag[k1+1] = s
             if iszero(s)
-                common.status = Cint(KLU_SINGULAR)
+                common.status = KLU_SINGULAR
                 if common.numerical_rank == Ti(EMPTY)
                     common.numerical_rank = Ti(k1)
                     common.singular_col = Ti(oldcol)
@@ -465,7 +465,7 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                 ukk = X[k+1]
                 X[k+1] = zero(Tv)
                 if iszero(ukk)
-                    common.status = Cint(KLU_SINGULAR)
+                    common.status = KLU_SINGULAR
                     if common.numerical_rank == Ti(EMPTY)
                         common.numerical_rank = Ti(k + k1)
                         common.singular_col = Ti(oldcol)

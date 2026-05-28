@@ -71,7 +71,7 @@ function increment!(A::AbstractArray{T}) where T<:Integer
 end
 increment(A::AbstractArray{<:Integer}) = increment!(copy(A))
 
-function kluerror(status::Integer)
+function kluerror(status::KLUStatus)
     if status == KLU_OK
         return
     elseif status == KLU_SINGULAR

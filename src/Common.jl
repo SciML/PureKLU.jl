@@ -1,11 +1,21 @@
 const EMPTY = -1
 const EMPTY_FLOAT = -1.0
 
-const KLU_OK = 0
-const KLU_SINGULAR = 1
-const KLU_OUT_OF_MEMORY = -2
-const KLU_INVALID = -3
-const KLU_TOO_LARGE = -4
+"""
+    KLUStatus
+
+Status codes mirroring SuiteSparse's KLU return values. Stored in
+[`KLUCommon`](@ref)'s `status` field. Non-negative values (`KLU_OK`,
+`KLU_SINGULAR`) indicate success or a benign singularity; negative
+values indicate hard errors, so `status >= KLU_OK` tests for "no error".
+"""
+@enum KLUStatus::Cint begin
+    KLU_OK = 0
+    KLU_SINGULAR = 1
+    KLU_OUT_OF_MEMORY = -2
+    KLU_INVALID = -3
+    KLU_TOO_LARGE = -4
+end
 
 """
     KLUCommon{Ti}
@@ -25,7 +35,7 @@ mutable struct KLUCommon{Ti<:Integer}
     ordering::Cint
     scale::Cint
     halt_if_singular::Cint
-    status::Cint
+    status::KLUStatus
     nrealloc::Cint
     structural_rank::Ti
     numerical_rank::Ti
@@ -61,7 +71,7 @@ function KLUCommon{Ti}() where {Ti<:Integer}
     C = KLUCommon{Ti}(
         0.001, 1.2, 1.2, 10.0, 0.0,
         Cint(1), Cint(0), Cint(2),
-        Cint(1), Cint(KLU_OK), Cint(0),
+        Cint(1), KLU_OK, Cint(0),
         Ti(EMPTY), Ti(EMPTY), Ti(EMPTY), Ti(0),
         EMPTY_FLOAT, EMPTY_FLOAT, EMPTY_FLOAT, EMPTY_FLOAT, 0.0,
         Val(true),
@@ -90,7 +100,7 @@ function klu_defaults!(C::KLUCommon{Ti}) where {Ti}
     C.ordering = Cint(0)
     C.scale = Cint(2)
     C.halt_if_singular = Cint(1)
-    C.status = Cint(KLU_OK)
+    C.status = KLU_OK
     C.nrealloc = Cint(0)
     C.structural_rank = Ti(EMPTY)
     C.numerical_rank = Ti(EMPTY)
