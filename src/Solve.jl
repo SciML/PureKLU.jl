@@ -396,10 +396,10 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
         nk = k2 - k1
 
         if nk == 1
-            oldcol = Int(Q[k1+1])
-            pend = Int(Ap[oldcol+2])
+            @inbounds oldcol = Int(Q[k1+1])
+            @inbounds pend = Int(Ap[oldcol+2])
             s = zero(Tv)
-            for p in Int(Ap[oldcol+1]):(pend-1)
+            @inbounds for p in Int(Ap[oldcol+1]):(pend-1)
                 oldrow = Int(Ai[p+1])
                 newrow = Int(Pinv[oldrow+1]) - k1
                 aik = _scale_aik(Ax[p+1],
@@ -412,7 +412,7 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                     s = aik
                 end
             end
-            Udiag[k1+1] = s
+            @inbounds Udiag[k1+1] = s
             if iszero(s)
                 common.status = Cint(KLU_SINGULAR)
                 if common.numerical_rank == Ti(EMPTY)
@@ -429,10 +429,10 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
             Llen_b = view(Llen, k1+1:k2)
             Uip_b = view(Uip, k1+1:k2)
             Ulen_b = view(Ulen, k1+1:k2)
-            for k in 0:(nk-1)
+            @inbounds for k in 0:(nk-1)
                 oldcol = Int(Q[k+k1+1])
                 pend = Int(Ap[oldcol+2])
-                for p in Int(Ap[oldcol+1]):(pend-1)
+                @inbounds for p in Int(Ap[oldcol+1]):(pend-1)
                     oldrow = Int(Ai[p+1])
                     newrow = Int(Pinv[oldrow+1]) - k1
                     aik = _scale_aik(Ax[p+1],
@@ -448,7 +448,7 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
 
                 uip = Int(Uip_b[k+1])
                 ulen = Int(Ulen_b[k+1])
-                for up in 0:(ulen-1)
+                @inbounds for up in 0:(ulen-1)
                     j = Int(bk.Ui[uip+up+1])
                     ujk = X[j+1]
                     X[j+1] = zero(Tv)
