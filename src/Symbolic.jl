@@ -25,6 +25,18 @@ mutable struct KLUSymbolic{Ti<:Integer}
     structural_rank::Ti
 end
 
+# Empty placeholder; `n == 0` is the "not yet analyzed" sentinel checked
+# throughout the package.  Lets `KLUFactorization.symbolic` be a concrete
+# non-Union field.
+KLUSymbolic{Ti}() where {Ti<:Integer} = KLUSymbolic{Ti}(
+    EMPTY_FLOAT, EMPTY_FLOAT, EMPTY_FLOAT, EMPTY_FLOAT,
+    Float64[],
+    Ti(0), Ti(0),
+    Ti[], Ti[], Ti[],
+    Ti(0), Ti(0), Ti(0),
+    Ti(0), Ti(0), Ti(EMPTY),
+)
+
 """
     klu_analyze(n, Ap, Ai, common; given_P=nothing, given_Q=nothing) -> KLUSymbolic
 
