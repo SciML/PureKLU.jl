@@ -322,13 +322,23 @@ function klu_refactor!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                        Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
                        common::KLUCommon{Ti};
                        allowsingular::Bool=false) where {Tv, Ti, Tr}
-    return _klu_refactor_impl!(Sym, Num, Ap, Ai, Ax, common, common.use_fma;
-                               allowsingular)
+    scale = Int(common.scale)
+    # Function-barrier on `scale_val` so the per-nonzero scale path is
+    # specialised per branch (no union-typed `scale_val` flowing through
+    # the inner loop).
+    if scale > 0
+        return _klu_refactor_impl!(Sym, Num, Ap, Ai, Ax, common, common.use_fma,
+                                   Val(true); allowsingular)
+    else
+        return _klu_refactor_impl!(Sym, Num, Ap, Ai, Ax, common, common.use_fma,
+                                   Val(false); allowsingular)
+    end
 end
 
 function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                              Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
-                             common::KLUCommon{Ti}, fma_val::Val;
+                             common::KLUCommon{Ti}, fma_val::Val,
+                             scale_val::Val;
                              allowsingular::Bool=false) where {Tv, Ti, Tr}
     common.status = Cint(KLU_OK)
     common.numerical_rank = Ti(EMPTY)
@@ -392,7 +402,9 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
             for p in Int(Ap[oldcol+1]):(pend-1)
                 oldrow = Int(Ai[p+1])
                 newrow = Int(Pinv[oldrow+1]) - k1
-                aik = scale > 0 ? Ax[p+1] / Rs[oldrow+1] : Ax[p+1]
+                aik = _scale_aik(Ax[p+1],
+                                 _rs_at(Rs, oldrow+1, scale_val),
+                                 scale_val)
                 if newrow < 0 && poff < nzoff
                     Offx[poff+1] = aik
                     poff += 1
@@ -423,7 +435,9 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                 for p in Int(Ap[oldcol+1]):(pend-1)
                     oldrow = Int(Ai[p+1])
                     newrow = Int(Pinv[oldrow+1]) - k1
-                    aik = scale > 0 ? Ax[p+1] / Rs[oldrow+1] : Ax[p+1]
+                    aik = _scale_aik(Ax[p+1],
+                                     _rs_at(Rs, oldrow+1, scale_val),
+                                     scale_val)
                     if newrow < 0 && poff < nzoff
                         Offx[poff+1] = aik
                         poff += 1

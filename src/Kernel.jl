@@ -72,6 +72,17 @@ end
 # do its FMA-friendly thing.
 @inline _cdiv(a, b, ::Val) = a / b
 @inline _cdiv(a::Complex, b::Complex, ::Val{true}) = a / b
+
+# Per-nonzero scale application.  `scale_val::Val{Bool}` is
+# `Val(common.scale > 0)`; threading it as a `Val` lets the compiler
+# specialise away the `if scale > 0` branch in the inner construction
+# loop.  Always uses direct division to keep bit-for-bit parity with
+# KLU.jl (`x / y` is one rounding; `x * inv(y)` is two).
+@inline _scale_aik(ax, _rs, ::Val{false}) = ax
+@inline _scale_aik(ax, rs::Real, ::Val{true}) = ax / rs
+
+@inline _rs_at(_, _, ::Val{false}) = nothing
+@inline _rs_at(v, i, ::Val{true}) = @inbounds v[i]
 @inline function _cdiv(a::Complex, b::Complex, ::Val{false})
     ar = real(a); ai = imag(a)
     br = real(b); bi = imag(b)
@@ -551,27 +562,29 @@ function _kernel_lsolve_symbolic!(n::Int, k::Int,
     return top
 end
 
-# Port of klu_kernel.c::construct_column
-function _kernel_construct_column!(k::Int, Ap::Vector{Ti}, Ai::Vector{Ti},
-                                   Ax::Vector{Tv}, Q::Vector{Ti}, X::Vector{Tv},
-                                   k1::Int, PSinv::Vector{Ti},
-                                   Rs::Vector{<:Real}, scale::Int,
-                                   Offp::Vector{Ti}, Offi::Vector{Ti},
-                                   Offx::Vector{Tv}) where {Tv, Ti}
+# Port of klu_kernel.c::construct_column.  Branches statically on
+# `(scale_val, fma_val)` so each instantiation collapses to the
+# appropriate inner loop with no per-iteration test (matches the
+# monomorphic C compile).
+@inline function _kernel_construct_column!(k::Int, Ap::Vector{Ti}, Ai::Vector{Ti},
+                                           Ax::Vector{Tv}, Q::Vector{Ti}, X::Vector{Tv},
+                                           k1::Int, PSinv::Vector{Ti},
+                                           Rs::Vector{Tr},
+                                           scale_val::Val,
+                                           Offp::Vector{Ti}, Offi::Vector{Ti},
+                                           Offx::Vector{Tv}) where {Tv, Ti, Tr<:Real}
     kglobal = k + k1
     @inbounds poff = Int(Offp[kglobal+1])
     @inbounds oldcol = Int(Q[kglobal+1])
     @inbounds pend = Int(Ap[oldcol+2])
     @inbounds pstart = Int(Ap[oldcol+1])
-    if scale <= 0
+    if scale_val === Val(false)
         @inbounds for p in pstart:(pend-1)
             oldrow = Int(Ai[p+1])
             i = Int(PSinv[oldrow+1]) - k1
             aik = Ax[p+1]
             if i < 0
-                Offi[poff+1] = Ti(oldrow)
-                Offx[poff+1] = aik
-                poff += 1
+                Offi[poff+1] = Ti(oldrow); Offx[poff+1] = aik; poff += 1
             else
                 X[i+1] = aik
             end
@@ -582,15 +595,14 @@ function _kernel_construct_column!(k::Int, Ap::Vector{Ti}, Ai::Vector{Ti},
             i = Int(PSinv[oldrow+1]) - k1
             aik = Ax[p+1] / Rs[oldrow+1]
             if i < 0
-                Offi[poff+1] = Ti(oldrow)
-                Offx[poff+1] = aik
-                poff += 1
+                Offi[poff+1] = Ti(oldrow); Offx[poff+1] = aik; poff += 1
             else
                 X[i+1] = aik
             end
         end
     end
     @inbounds Offp[kglobal+2] = Ti(poff)
+    return nothing
 end
 
 # Port of klu_kernel.c::lsolve_numeric.
@@ -790,9 +802,10 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
                     Pblock::Vector{Ti},
                     wk::KernelWorkspace{Tv, Ti},
                     k1::Int, PSinv::Vector{Ti},
-                    Rs::Vector{<:Real}, scale::Int,
+                    Rs::Vector{Tr},
+                    scale_val::Val,
                     Offp::Vector{Ti}, Offi::Vector{Ti}, Offx::Vector{Tv},
-                    common::KLUCommon{Ti}, fma_val::Val) where {Tv, Ti}
+                    common::KLUCommon{Ti}, fma_val::Val) where {Tv, Ti, Tr<:Real}
     n = nk
     tol = common.tol
     @inbounds for k in 1:n
@@ -831,7 +844,8 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
                                        wk.Flag, wk.Lpend, wk.Ap_pos,
                                        block.Li, Llen, Lip, k1, PSinv)
 
-        _kernel_construct_column!(k, Ap, Ai, Ax, Q, wk.X, k1, PSinv, Rs, scale,
+        _kernel_construct_column!(k, Ap, Ai, Ax, Q, wk.X, k1, PSinv,
+                                  Rs, scale_val,
                                   Offp, Offi, Offx)
         _kernel_lsolve_numeric!(wk.Pinv, block.Li, block.Lx, wk.Stack, Lip,
                                 top, n, Llen, wk.X, fma_val)
@@ -922,8 +936,10 @@ function klu_factor!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
                      allowsingular::Bool=false,
                      ) where {Tv, Ti}
     Tr = _real_eltype(Tv)
+    scale_val = Int(common.scale) > 0 ? Val(true) : Val(false)
     return _klu_factor_impl!(Sym, Ap, Ai, Ax, common, common.use_fma,
-                             KLUNumeric{Tv, Ti, Tr}(), allowsingular)
+                             KLUNumeric{Tv, Ti, Tr}(), allowsingular,
+                             scale_val)
 end
 
 # Variant that reuses an existing `KLUNumeric` (its block capacities and
@@ -937,15 +953,17 @@ function klu_factor!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
                      reuse::KLUNumeric{Tv, Ti};
                      allowsingular::Bool=false,
                      ) where {Tv, Ti}
+    scale_val = Int(common.scale) > 0 ? Val(true) : Val(false)
     return _klu_factor_impl!(Sym, Ap, Ai, Ax, common, common.use_fma,
-                             reuse, allowsingular)
+                             reuse, allowsingular, scale_val)
 end
 
 function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
                            Ax::Vector{Tv}, common::KLUCommon{Ti},
                            fma_val::Val,
                            reuse::KLUNumeric{Tv, Ti, Tr},
-                           allowsingular::Bool) where {Tv, Ti, Tr}
+                           allowsingular::Bool,
+                           scale_val::Val) where {Tv, Ti, Tr}
     common.status = Cint(KLU_OK)
     common.numerical_rank = Ti(EMPTY)
     common.singular_col = Ti(EMPTY)
@@ -981,7 +999,6 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
             return Num
         end
     end
-
     Num.Offp[1] = Ti(0)
     lnz_total = 0
     unz_total = 0
@@ -1001,30 +1018,18 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
             oldcol = Int(Q[k1+1])
             pend = Int(Ap[oldcol+2])
             s = zero(Tv)
-            if scale <= 0
-                for p in Int(Ap[oldcol+1]):(pend-1)
-                    oldrow = Int(Ai[p+1])
-                    newrow = Int(Pinv[oldrow+1])
-                    if newrow < k1
-                        Num.Offi[poff+1] = Ti(oldrow)
-                        Num.Offx[poff+1] = Ax[p+1]
-                        poff += 1
-                    else
-                        s = Ax[p+1]
-                    end
-                end
-            else
-                for p in Int(Ap[oldcol+1]):(pend-1)
-                    oldrow = Int(Ai[p+1])
-                    newrow = Int(Pinv[oldrow+1])
-                    aik = Ax[p+1] / Num.Rs[oldrow+1]
-                    if newrow < k1
-                        Num.Offi[poff+1] = Ti(oldrow)
-                        Num.Offx[poff+1] = aik
-                        poff += 1
-                    else
-                        s = aik
-                    end
+            for p in Int(Ap[oldcol+1]):(pend-1)
+                oldrow = Int(Ai[p+1])
+                newrow = Int(Pinv[oldrow+1])
+                aik = _scale_aik(Ax[p+1],
+                                 _rs_at(Num.Rs, oldrow+1, scale_val),
+                                 scale_val)
+                if newrow < k1
+                    Num.Offi[poff+1] = Ti(oldrow)
+                    Num.Offx[poff+1] = aik
+                    poff += 1
+                else
+                    s = aik
                 end
             end
             Num.Udiag[k1+1] = s
@@ -1056,7 +1061,7 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
                 view(Num.Lip, k1+1:k2),
                 view(Num.Uip, k1+1:k2),
                 Pblock,
-                wk, k1, Pinv, Num.Rs, scale,
+                wk, k1, Pinv, Num.Rs, scale_val,
                 Num.Offp, Num.Offi, Num.Offx,
                 common, fma_val,
             )
