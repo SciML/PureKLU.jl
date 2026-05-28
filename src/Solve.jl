@@ -354,17 +354,19 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
         if isempty(Num.Xtmp)
             Num.Xtmp = Vector{Tr}(undef, n)
         end
-    else
+    elseif !isempty(Num.Rs)
+        # Drop stale row-scaling state when user turns scaling off.
         Num.Rs = Tr[]
     end
     Rs = Num.Rs
 
-    if scale >= 0
-        if !klu_scale!(scale, n, Ap, Ai, Ax,
-                       scale > 0 ? Rs : nothing, nothing, common)
+    if scale > 0
+        if !klu_scale!(scale, n, Ap, Ai, Ax, Rs, nothing, common)
             return Num
         end
     end
+    # scale == 0: pattern already validated at factor time; skip walk.
+    # scale < 0: caller opted out of scaling and validation.
 
     # Refactor only touches the first `maxblock` entries of `X`, and
     # the algorithm restores each column's scratch positions to zero

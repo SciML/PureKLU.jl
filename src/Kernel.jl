@@ -328,6 +328,62 @@ end
 # ---------- scaling --------------------------------------------------------
 
 """
+    _validate_pattern!(n, Ap, Ai, W, common) -> Bool
+
+Validate the CSC pattern of an input matrix: `Ap[1]==0`, monotone column
+pointers, row indices in `[0, n)`, and (when `W !== nothing`) no
+duplicate entries within a single column. Sets `common.status` to
+`KLU_INVALID` and returns `false` on the first violation. Extracted from
+the original `klu_scale.c` so the factor path can validate the pattern
+once without paying the row-norm work, and so the refactor path can
+skip the whole walk when `scale == 0` (pattern is unchanged after
+factor).
+"""
+function _validate_pattern!(n::Integer,
+                            Ap::Vector{Ti}, Ai::Vector{Ti},
+                            W::Union{Vector{Ti},Nothing},
+                            common::KLUCommon{Ti}) where {Ti}
+    if n <= 0
+        common.status = Cint(KLU_INVALID)
+        return false
+    end
+    if Ap[1] != 0 || Ap[n+1] < 0
+        common.status = Cint(KLU_INVALID)
+        return false
+    end
+    for col in 1:n
+        if Ap[col] > Ap[col+1]
+            common.status = Cint(KLU_INVALID)
+            return false
+        end
+    end
+    check_duplicates = W !== nothing
+    if check_duplicates
+        @inbounds for row in 1:n
+            W[row] = Ti(EMPTY)
+        end
+    end
+    for col in 1:n
+        pend = Int(Ap[col+1])
+        for p in (Int(Ap[col])+1):pend
+            row = Int(Ai[p]) + 1
+            if row < 1 || row > n
+                common.status = Cint(KLU_INVALID)
+                return false
+            end
+            if check_duplicates
+                if W[row] == Ti(col - 1)
+                    common.status = Cint(KLU_INVALID)
+                    return false
+                end
+                W[row] = Ti(col - 1)
+            end
+        end
+    end
+    return true
+end
+
+"""
     klu_scale!(scale, n, Ap, Ai, Ax, Rs, W, common) -> Bool
 
 Row-scale a matrix in CSC form. `scale = 0` validates the matrix but
@@ -919,12 +975,16 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
     end
 
     scale = Int(common.scale)
-    if scale >= 0
+    if scale > 0
         ok = klu_scale!(scale, n, Ap, Ai, Ax,
-                        scale > 0 ? Num.Rs : nothing,
+                        Num.Rs,
                         Num.Pnum,
                         common)
         if !ok
+            return Num
+        end
+    elseif scale == 0
+        if !_validate_pattern!(n, Ap, Ai, Num.Pnum, common)
             return Num
         end
     end

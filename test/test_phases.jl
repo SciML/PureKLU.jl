@@ -191,6 +191,42 @@ end
     end
 end
 
+@testset "scale=0: factor + refactor still correct and 0-alloc on refactor" begin
+    # Verifies that the scale=0 optimisation (factor: validate-only,
+    # refactor: skip walk) preserves correctness and the 0-alloc
+    # property on the refactor hot path.
+    Random.seed!(2026)
+    for n in (10, 50, 200)
+        A = sprand(n, n, 0.1) + n*I
+        dropzeros!(A)
+        K_ref = KLU.klu(A; check=false)
+        K_pj  = PureKLU.klu(A; check=false, use_fma=USE_FMA)
+        K_ref.common.scale = Int32(0)
+        K_pj.common.scale  = Int32(0)
+        KLU.klu_factor!(K_ref)
+        PureKLU.klu_factor!(K_pj)
+        @test K_ref.L == K_pj.L
+        @test K_ref.U == K_pj.U
+        @test K_ref.F == K_pj.F
+        b = randn(n)
+        @test K_ref \ b ≈ K_pj \ b
+        # Refactor with new values on the same pattern; status must still be OK.
+        Vnew = randn(nnz(A)) .+ 0.5
+        Anew = SparseMatrixCSC(n, n, copy(A.colptr), copy(A.rowval), Vnew)
+        KLU.klu!(K_ref, Anew)
+        PureKLU.klu!(K_pj, Anew)
+        @test K_ref.L == K_pj.L
+        @test K_ref.U == K_pj.U
+        @test K_ref.F == K_pj.F
+        @test Int(K_pj.common.status) == 0
+        # Refactor on .nzval-only path. Warm once, then assert 0 allocs.
+        nz = Anew.nzval
+        PureKLU.klu!(K_pj, nz)
+        @test (@allocated PureKLU.klu!(K_pj, nz)) == 0
+        @test Int(K_pj.common.status) == 0
+    end
+end
+
 # ---------- symbolic struct equality ---------------------------------------
 
 @testset "Symbolic struct fields: nz, nblocks, maxblock, nzoff, structural_rank" begin
