@@ -728,10 +728,7 @@ function _kernel_lpivot!(diagrow::Int, k::Int, n::Int,
         return false, pivrow, pivot, abs_pivot
     end
 
-    # Scaling pass: each entry is divided by the same pivot, no cross-iteration
-    # dependency.  `@simd ivdep` is safe because the writes are to consecutive
-    # storage locations.  `len` equals the post-decrement `Llen[k+1]`.
-    @inbounds @simd ivdep for p in 0:(len-1)
+    @inbounds for p in 0:(len-1)
         block_Lx[lip+p+1] = _cdiv(block_Lx[lip+p+1], pivot, fma_val)
     end
 
@@ -910,13 +907,11 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
         unz += ulen + 1
     end
 
-    # Remap L row indices using the final Pinv.  Each iteration updates a
-    # distinct slot in block.Li (consecutive `p` values), so the writes
-    # don't alias the reads in a later iteration.  Safe to vectorise.
+    # Remap L row indices using the final Pinv.
     @inbounds for k in 0:(n-1)
         lip_k = Int(Lip[k+1])
         llen_k = Int(Llen[k+1])
-        @simd ivdep for p in 0:(llen_k-1)
+        @inbounds for p in 0:(llen_k-1)
             block.Li[lip_k+p+1] = Ti(wk.Pinv[Int(block.Li[lip_k+p+1])+1])
         end
     end
