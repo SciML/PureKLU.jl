@@ -487,39 +487,56 @@ end
     top = top_in
     kT = Ti(k)
     emptyT = Ti(EMPTY)
-    @inbounds while head >= 0
-        j = Int(Stack[head+1])
+    # `j`, `jnew`, `lip_jnew` describe the node currently at the top of the
+    # DFS stack.  They only change when `head` changes (push/pop), so we hoist
+    # them out of the per-node visit and refresh them via `@goto restart`
+    # instead of reloading from `Stack`/`Pinv`/`Lip` on every outer iteration.
+    # `pos` (the scan cursor for the current node) is kept in a register and
+    # spilled to `Ap_pos[head+1]` only when we push, then reloaded on pop.
+    j = j_in
+    @label restart
+    @inbounds begin
         jnew = Int(Pinv[j+1])
+        lip_jnew = Int(Lip[jnew+1])
         if Flag[j+1] != kT
             Flag[j+1] = kT
             lp = Lpend[jnew+1]
-            Ap_pos[head+1] = (lp == emptyT) ? Llen[jnew+1] : lp
+            pos = Int((lp == emptyT) ? Llen[jnew+1] : lp) - 1
+        else
+            pos = Int(Ap_pos[head+1]) - 1
         end
-        lip_jnew = Int(Lip[jnew+1])
-        Ap_pos[head+1] -= Ti(1)
-        pos = Int(Ap_pos[head+1])
-        broke = false
-        while pos >= 0
-            i = Int(block_Li[lip_jnew + pos + 1])
-            if Flag[i+1] != kT
-                if Pinv[i+1] >= 0
-                    Ap_pos[head+1] = Ti(pos)
-                    head += 1
-                    Stack[head+1] = Ti(i)
-                    broke = true
-                    break
-                else
-                    Flag[i+1] = kT
-                    block_Li[Lip_k + l_length + 1] = Ti(i)
-                    l_length += 1
+        while true
+            broke = false
+            while pos >= 0
+                i = Int(block_Li[lip_jnew + pos + 1])
+                if Flag[i+1] != kT
+                    if Pinv[i+1] >= 0
+                        # Push child `i`: save our resume cursor, then restart
+                        # with the child as the new top-of-stack node.
+                        Ap_pos[head+1] = Ti(pos)
+                        head += 1
+                        Stack[head+1] = Ti(i)
+                        j = i
+                        broke = true
+                        break
+                    else
+                        Flag[i+1] = kT
+                        block_Li[Lip_k + l_length + 1] = Ti(i)
+                        l_length += 1
+                    end
                 end
+                pos -= 1
             end
-            pos -= 1
-        end
-        if !broke
+            broke && @goto restart
+            # Node fully explored: emit it and pop.
             head -= 1
             top -= 1
             Stack[top+1] = Ti(j)
+            head < 0 && break
+            j = Int(Stack[head+1])
+            jnew = Int(Pinv[j+1])
+            lip_jnew = Int(Lip[jnew+1])
+            pos = Int(Ap_pos[head+1]) - 1
         end
     end
     return top, l_length
