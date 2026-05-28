@@ -187,6 +187,22 @@ end
 KLUNumeric{Tv, Ti}(args...) where {Tv, Ti} =
     KLUNumeric{Tv, Ti, _real_eltype(Tv)}(args...)
 
+# Empty placeholder; `n == 0` is the "not yet factored" sentinel checked
+# throughout the package.  Lets `KLUFactorization.numeric` be a concrete
+# non-Union field, and gives `_prepare_numeric_for_reuse!` a uniform path
+# (`n == 0` ⇒ allocate fresh; otherwise reuse buffers).
+KLUNumeric{Tv, Ti, Tr}() where {Tv, Ti<:Integer, Tr<:Real} = KLUNumeric{Tv, Ti, Tr}(
+    Ti(0), Ti(0), Ti(0), Ti(0), Ti(0), Ti(0),
+    Ti[], Ti[], Ti[], Ti[], Ti[], Ti[],
+    KLUNumericBlock{Tv, Ti}[],
+    Tv[], Tr[],
+    Ti[], Ti[], Tv[],
+    Ti(0),
+    Tv[], Tr[],
+    KernelWorkspace{Tv, Ti}(0),
+    Ti[],
+)
+
 function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti}) where {Tv, Ti}
     n = Int(Sym.n)
     nblocks = Int(Sym.nblocks)
@@ -838,16 +854,17 @@ function klu_factor!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
                      Ax::Vector{Tv}, common::KLUCommon{Ti};
                      allowsingular::Bool=false,
                      ) where {Tv, Ti}
-    # `common.use_fma` is a `Union{Val{true},Val{false}}`, so this lookup
-    # is type-stable and the function barrier below specialises the
-    # implementation for each variant.
-    return _klu_factor_impl!(Sym, Ap, Ai, Ax, common, common.use_fma, nothing,
-                             allowsingular)
+    Tr = _real_eltype(Tv)
+    return _klu_factor_impl!(Sym, Ap, Ai, Ax, common, common.use_fma,
+                             KLUNumeric{Tv, Ti, Tr}(), allowsingular)
 end
 
 # Variant that reuses an existing `KLUNumeric` (its block capacities and
-# kernel workspace) instead of fresh-allocating one.  Used by the
-# `KLUFactorization` top-level entry point on warm calls.
+# kernel workspace).  Used by the `KLUFactorization` top-level entry
+# point so subsequent `klu_factor!` calls allocate nothing beyond the
+# (possible) geometric grow path in the kernel.  Pass an empty
+# `KLUNumeric{Tv, Ti, Tr}()` (the default field value on a fresh
+# `KLUFactorization`) on the cold call.
 function klu_factor!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
                      Ax::Vector{Tv}, common::KLUCommon{Ti},
                      reuse::KLUNumeric{Tv, Ti};
@@ -860,14 +877,15 @@ end
 function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
                            Ax::Vector{Tv}, common::KLUCommon{Ti},
                            fma_val::Val,
-                           reuse::Union{KLUNumeric{Tv, Ti}, Nothing},
-                           allowsingular::Bool) where {Tv, Ti}
+                           reuse::KLUNumeric{Tv, Ti, Tr},
+                           allowsingular::Bool) where {Tv, Ti, Tr}
     common.status = Cint(KLU_OK)
     common.numerical_rank = Ti(EMPTY)
     common.singular_col = Ti(EMPTY)
     common.noffdiag = Ti(0)
 
-    Num = reuse === nothing ? _alloc_numeric(Tv, Sym, common) : _prepare_numeric_for_reuse!(reuse, Sym, common)
+    Num = reuse.n == Sym.n ? _prepare_numeric_for_reuse!(reuse, Sym, common) :
+                             _alloc_numeric(Tv, Sym, common)
     n = Int(Sym.n)
     nblocks = Int(Sym.nblocks)
     nzoff = Int(Sym.nzoff)

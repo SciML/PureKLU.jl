@@ -99,11 +99,12 @@ property accessors (`F.L`, `F.U`, `F.F`, `F.p`, `F.q`, `F.Rs`, …) work.
 """
 mutable struct KLUFactorization{Tv, Ti<:Integer, Tr<:Real} <: AbstractKLUFactorization{Tv, Ti}
     common::KLUCommon{Ti}
-    symbolic::Union{KLUSymbolic{Ti}, Nothing}
-    # `Tr` is the third type parameter so this field is concrete -- a
-    # `Union{KLUNumeric{Tv,Ti,<:Real}, Nothing}` would defeat the
-    # zero-allocation hot-path dispatch.
-    numeric::Union{KLUNumeric{Tv, Ti, Tr}, Nothing}
+    # `symbolic.n == 0` is the "not yet analyzed" sentinel; `numeric.n ==
+    # 0` is "not yet factored".  Concrete fields (no `Union{..., Nothing}`)
+    # so hot-path accesses are type-stable.  `Tr` is a third type
+    # parameter for the same reason on `numeric`.
+    symbolic::KLUSymbolic{Ti}
+    numeric::KLUNumeric{Tv, Ti, Tr}
     n::Int
     colptr::Vector{Ti}    # 0-based
     rowval::Vector{Ti}    # 0-based
@@ -113,7 +114,9 @@ mutable struct KLUFactorization{Tv, Ti<:Integer, Tr<:Real} <: AbstractKLUFactori
                               nzval::Vector{Tv}) where {Ti<:Integer, Tv}
         Tr = _real_eltype(Tv)
         common = KLUCommon{Ti}()
-        return new{Tv, Ti, Tr}(common, nothing, nothing, Int(n), colptr, rowval, nzval)
+        sym = KLUSymbolic{Ti}()
+        num = KLUNumeric{Tv, Ti, Tr}()
+        return new{Tv, Ti, Tr}(common, sym, num, Int(n), colptr, rowval, nzval)
     end
 end
 
@@ -153,8 +156,11 @@ Run the symbolic analysis (BTF + per-block ordering) on `K`, storing the
 result in `K.symbolic`. Subsequent factorisations reuse it. The two-arg
 form accepts user-supplied row/column permutations.
 """
+_is_analyzed(K::KLUFactorization) = getfield(K, :symbolic).n != 0
+_is_factored(K::KLUFactorization) = getfield(K, :numeric).n != 0
+
 function klu_analyze!(K::KLUFactorization{Tv, Ti}; check::Bool=true) where {Tv, Ti}
-    getfield(K, :symbolic) !== nothing && return K
+    _is_analyzed(K) && return K
     Sym = klu_analyze(K.n, K.colptr, K.rowval, K.common)
     if Sym === nothing && check
         kluerror(K.common)
@@ -166,7 +172,7 @@ end
 
 function klu_analyze!(K::KLUFactorization{Tv, Ti}, P::Vector{Ti}, Q::Vector{Ti};
                       check::Bool=true) where {Tv, Ti}
-    getfield(K, :symbolic) !== nothing && return K
+    _is_analyzed(K) && return K
     Sym = klu_analyze(K.n, K.colptr, K.rowval, K.common; given_P=P, given_Q=Q)
     if Sym === nothing && check
         kluerror(K.common)
@@ -184,30 +190,24 @@ been done. Mirrors `KLU.jl::klu_factor!`.
 """
 function klu_factor!(K::KLUFactorization{Tv, Ti}; check::Bool=true,
                      allowsingular::Bool=false) where {Tv, Ti}
-    if getfield(K, :symbolic) === nothing && K.common.status >= KLU_OK
+    if !_is_analyzed(K) && K.common.status >= KLU_OK
         klu_analyze!(K; check)
     end
-    if getfield(K, :symbolic) !== nothing && K.common.status >= KLU_OK
+    if _is_analyzed(K) && K.common.status >= KLU_OK
         K.common.halt_if_singular = (!allowsingular && check) ? Cint(1) : Cint(0)
         # Reuse the existing numeric struct (and its preallocated block
         # capacities + kernel workspace) when possible so subsequent
         # `klu_factor!` calls on the same `KLUFactorization` allocate
         # nothing beyond the (possible) geometric grow path in the kernel.
-        existing = getfield(K, :numeric)
         Sym = getfield(K, :symbolic)
-        if existing === nothing
-            Num = klu_factor!(Sym, K.colptr, K.rowval, K.nzval, K.common;
-                              allowsingular)
-        else
-            Num = klu_factor!(Sym, K.colptr, K.rowval, K.nzval, K.common,
-                              existing; allowsingular)
-        end
+        existing = getfield(K, :numeric)
+        Num = klu_factor!(Sym, K.colptr, K.rowval, K.nzval, K.common,
+                          existing; allowsingular)
         K.common.halt_if_singular = Cint(1)
         if K.common.status < KLU_OK && check
             kluerror(K.common)
         end
         if K.common.status == KLU_SINGULAR && !allowsingular && check
-            setfield!(K, :numeric, nothing)
             kluerror(K.common)
         end
         setfield!(K, :numeric, Num)
@@ -222,6 +222,7 @@ end
 function klu!(K::KLUFactorization{Tv, Ti}, nzval::Vector{Tv};
               check::Bool=true, allowsingular::Bool=false) where {Tv, Ti}
     length(nzval) != length(K.nzval) && throw(DimensionMismatch())
+    _is_factored(K) || throw(ArgumentError("KLUFactorization has not been factored yet. Call `klu_factor!` first."))
     K.nzval = nzval
     K.common.halt_if_singular = (!allowsingular && check) ? Cint(1) : Cint(0)
     klu_refactor!(getfield(K, :symbolic), getfield(K, :numeric),
@@ -297,7 +298,7 @@ In-place solve. `B` is overwritten with the solution.
 function solve!(K::AbstractKLUFactorization{Tv, Ti}, B::StridedVecOrMat{Tv};
                 check::Bool=true) where {Tv, Ti}
     stride(B, 1) == 1 || throw(ArgumentError("B must have unit strides"))
-    getfield(K, :numeric) === nothing && klu_factor!(K)
+    _is_factored(K) || klu_factor!(K)
     size(B, 1) == size(K, 1) || throw(DimensionMismatch())
     klu_solve!(getfield(K, :symbolic), getfield(K, :numeric), B, K.common)
     if K.common.status != KLU_OK && check
@@ -310,7 +311,7 @@ function solve!(K::AdjointFact{Tv, KF}, B::StridedVecOrMat{Tv};
                 check::Bool=true) where {Tv, Ti, KF<:AbstractKLUFactorization{Tv, Ti}}
     parent_K = parent(K)
     stride(B, 1) == 1 || throw(ArgumentError("B must have unit strides"))
-    getfield(parent_K, :numeric) === nothing && klu_factor!(parent_K)
+    _is_factored(parent_K) || klu_factor!(parent_K)
     size(B, 1) == size(parent_K, 1) || throw(DimensionMismatch())
     klu_tsolve!(getfield(parent_K, :symbolic), getfield(parent_K, :numeric),
                 B, parent_K.common; conj_solve=(Tv <: Complex))
@@ -324,7 +325,7 @@ function solve!(K::TransposeFact{Tv, KF}, B::StridedVecOrMat{Tv};
                 check::Bool=true) where {Tv, Ti, KF<:AbstractKLUFactorization{Tv, Ti}}
     parent_K = parent(K)
     stride(B, 1) == 1 || throw(ArgumentError("B must have unit strides"))
-    getfield(parent_K, :numeric) === nothing && klu_factor!(parent_K)
+    _is_factored(parent_K) || klu_factor!(parent_K)
     size(B, 1) == size(parent_K, 1) || throw(DimensionMismatch())
     klu_tsolve!(getfield(parent_K, :symbolic), getfield(parent_K, :numeric),
                 B, parent_K.common; conj_solve=false)
@@ -358,7 +359,7 @@ end
 
 function LinearAlgebra.issuccess(K::AbstractKLUFactorization; allowsingular::Bool=false)
     return (allowsingular ? K.common.status >= KLU_OK : K.common.status == KLU_OK) &&
-           getfield(K, :numeric) !== nothing
+           _is_factored(K)
 end
 
 # --- property access (mirrors KLU.jl) --------------------------------------
@@ -375,33 +376,33 @@ end
 
 function getproperty(K::AbstractKLUFactorization{Tv, Ti}, s::Symbol) where {Tv, Ti}
     if s ∈ (:lnz, :unz, :nzoff)
-        getfield(K, :numeric) === nothing && throw(ArgumentError("This KLUFactorization has not yet been factored. Try `klu_factor!`."))
+        _is_factored(K) || throw(ArgumentError("This KLUFactorization has not yet been factored. Try `klu_factor!`."))
         Num = getfield(K, :numeric)
         s === :lnz && return Int(Num.lnz)
         s === :unz && return Int(Num.unz)
         s === :nzoff && return Int(Num.nzoff)
     end
     if s ∈ (:nblocks, :maxblock)
-        getfield(K, :symbolic) === nothing && throw(ArgumentError("This KLUFactorization has not yet been analyzed. Try `klu_analyze!`."))
+        _is_analyzed(K) || throw(ArgumentError("This KLUFactorization has not yet been analyzed. Try `klu_analyze!`."))
         Sym = getfield(K, :symbolic)
         s === :nblocks && return Int(Sym.nblocks)
         s === :maxblock && return Int(Sym.maxblock)
     end
     if s === :symbolic
-        getfield(K, :symbolic) === nothing && throw(ArgumentError("This KLUFactorization has not yet been analyzed. Try `klu_analyze!`."))
+        _is_analyzed(K) || throw(ArgumentError("This KLUFactorization has not yet been analyzed. Try `klu_analyze!`."))
         return getfield(K, :symbolic)
     end
     if s === :numeric
-        getfield(K, :numeric) === nothing && throw(ArgumentError("This KLUFactorization has not yet been factored. Try `klu_factor!`."))
+        _is_factored(K) || throw(ArgumentError("This KLUFactorization has not yet been factored. Try `klu_factor!`."))
         return getfield(K, :numeric)
     end
     if s ∉ (:L, :U, :F, :p, :q, :R, :Rs)
         return getfield(K, s)
     end
 
+    _is_analyzed(K) || throw(ArgumentError("Not yet analyzed."))
+    _is_factored(K) || throw(ArgumentError("Not yet factored."))
     Sym = getfield(K, :symbolic); Num = getfield(K, :numeric)
-    Sym === nothing && throw(ArgumentError("Not yet analyzed."))
-    Num === nothing && throw(ArgumentError("Not yet factored."))
 
     if s === :p
         out = copy(Num.Pnum); out .+= one(Ti); return out
@@ -553,7 +554,7 @@ end
 
 function show(io::IO, mime::MIME{Symbol("text/plain")}, K::AbstractKLUFactorization)
     summary(io, K); println(io)
-    if getfield(K, :numeric) !== nothing
+    if _is_factored(K)
         println(io, "L factor:")
         show(io, mime, K.L)
         println(io, "\nU factor:")
