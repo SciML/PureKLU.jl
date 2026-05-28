@@ -719,8 +719,18 @@ function _kernel_lpivot!(diagrow::Int, k::Int, n::Int,
     # Scaling pass: each entry is divided by the same pivot, no cross-iteration
     # dependency.  `@simd ivdep` is safe because the writes are to consecutive
     # storage locations.  `len` equals the post-decrement `Llen[k+1]`.
-    @inbounds @simd ivdep for p in 0:(len-1)
-        block_Lx[lip+p+1] = _cdiv(block_Lx[lip+p+1], pivot, fma_val)
+    # When `fma_val === Val(true)` we hoist `inv(pivot)` and multiply --
+    # trades 1 division per L entry for 1 division per L column.  Costs at
+    # most 1 ULP off the bit-exact division path (Val(false)).
+    if fma_val === Val(true)
+        pivot_inv = inv(pivot)
+        @inbounds @simd ivdep for p in 0:(len-1)
+            block_Lx[lip+p+1] = block_Lx[lip+p+1] * pivot_inv
+        end
+    else
+        @inbounds @simd ivdep for p in 0:(len-1)
+            block_Lx[lip+p+1] = _cdiv(block_Lx[lip+p+1], pivot, fma_val)
+        end
     end
 
     return true, pivrow, pivot, abs_pivot

@@ -467,10 +467,19 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                 # distinct (sparse LU column pattern), so the gather/scatter
                 # on `X[i+1]` is alias-free; writes to `bk.Lx[lip_k+p+1]`
                 # are to consecutive slots.
-                @inbounds @simd ivdep for p in 0:(llen_k-1)
-                    i = Int(bk.Li[lip_k+p+1])
-                    bk.Lx[lip_k+p+1] = _cdiv(X[i+1], ukk, fma_val)
-                    X[i+1] = zero(Tv)
+                if fma_val === Val(true)
+                    ukk_inv = inv(ukk)
+                    @inbounds @simd ivdep for p in 0:(llen_k-1)
+                        i = Int(bk.Li[lip_k+p+1])
+                        bk.Lx[lip_k+p+1] = X[i+1] * ukk_inv
+                        X[i+1] = zero(Tv)
+                    end
+                else
+                    @inbounds @simd ivdep for p in 0:(llen_k-1)
+                        i = Int(bk.Li[lip_k+p+1])
+                        bk.Lx[lip_k+p+1] = _cdiv(X[i+1], ukk, fma_val)
+                        X[i+1] = zero(Tv)
+                    end
                 end
             end
         end
