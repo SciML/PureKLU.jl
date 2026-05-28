@@ -51,7 +51,7 @@ function klu_analyze(n::Integer, Ap::Vector{Ti}, Ai::Vector{Ti},
                      common::KLUCommon{Ti};
                      given_P::Union{Nothing,Vector{Ti}}=nothing,
                      given_Q::Union{Nothing,Vector{Ti}}=nothing) where {Ti<:Integer}
-    common.status = Cint(KLU_OK)
+    common.status = KLU_OK
     common.structural_rank = Ti(EMPTY)
 
     if given_P !== nothing || given_Q !== nothing
@@ -66,19 +66,19 @@ end
 function _allocate_symbolic(n::Ti, Ap::Vector{Ti}, Ai::Vector{Ti},
                             common::KLUCommon{Ti}) where {Ti}
     if n <= 0 || Ap[1] != 0 || Ap[n+1] < 0
-        common.status = Cint(KLU_INVALID)
+        common.status = KLU_INVALID
         return nothing
     end
     nz = Ap[n+1]
     @inbounds for j in 1:n
         if Ap[j] > Ap[j+1]
-            common.status = Cint(KLU_INVALID)
+            common.status = KLU_INVALID
             return nothing
         end
         for p in (Ap[j]+1):Ap[j+1]
             i = Ai[p]
             if i < 0 || i >= n
-                common.status = Cint(KLU_INVALID)
+                common.status = KLU_INVALID
                 return nothing
             end
         end
@@ -102,7 +102,7 @@ function _order_and_analyze(n, Ap::Vector{Ti}, Ai::Vector{Ti},
     Sym === nothing && return nothing
 
     if common.ordering ∉ (0, 1, 3)
-        common.status = Cint(KLU_INVALID)
+        common.status = KLU_INVALID
         return nothing
     end
 
@@ -324,11 +324,11 @@ function _analyze_worker!(Sym::KLUSymbolic{Ti}, n::Int,
             lnz1 = EMPTY_FLOAT
             flops1 = EMPTY_FLOAT
         else
-            common.status = Cint(KLU_INVALID)
+            common.status = KLU_INVALID
             return
         end
         if !ok
-            common.status = Cint(KLU_INVALID)
+            common.status = KLU_INVALID
             return
         end
 
@@ -349,7 +349,7 @@ function _analyze_worker!(Sym::KLUSymbolic{Ti}, n::Int,
     Sym.unz = lnz
     Sym.nzoff = Ti(nzoff)
     Sym.est_flops = flops
-    common.status = Cint(KLU_OK)
+    common.status = KLU_OK
     return Sym
 end
 
