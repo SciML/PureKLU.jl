@@ -413,10 +413,9 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
             end
         else
             bk = Num.LUbx[block]
-            Lip_b = view(Lip, k1+1:k2)
-            Llen_b = view(Llen, k1+1:k2)
-            Uip_b = view(Uip, k1+1:k2)
-            Ulen_b = view(Ulen, k1+1:k2)
+            # Index into Lip/Llen/Uip/Ulen using `k1` as an offset rather
+            # than constructing per-block SubArrays — mirrors C KLU which
+            # just uses `Lip + k1` pointer arithmetic.
             for k in 0:(nk-1)
                 oldcol = Int(Q[k+k1+1])
                 pend = Int(Ap[oldcol+2])
@@ -432,15 +431,15 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                     end
                 end
 
-                uip = Int(Uip_b[k+1])
-                ulen = Int(Ulen_b[k+1])
+                uip = Int(Uip[k1+k+1])
+                ulen = Int(Ulen[k1+k+1])
                 for up in 0:(ulen-1)
                     j = Int(bk.Ui[uip+up+1])
                     ujk = X[j+1]
                     X[j+1] = zero(Tv)
                     bk.Ux[uip+up+1] = ujk
-                    lip_j = Int(Lip_b[j+1])
-                    llen_j = Int(Llen_b[j+1])
+                    lip_j = Int(Lip[k1+j+1])
+                    llen_j = Int(Llen[k1+j+1])
                     # Same scatter pattern as the factor / forward solve:
                     # distinct row indices per column, alias-free.
                     @inbounds @simd ivdep for p in 0:(llen_j-1)
@@ -461,8 +460,8 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                     end
                 end
                 Udiag[k+k1+1] = ukk
-                lip_k = Int(Lip_b[k+1])
-                llen_k = Int(Llen_b[k+1])
+                lip_k = Int(Lip[k1+k+1])
+                llen_k = Int(Llen[k1+k+1])
                 # Row indices `bk.Li[lip_k+1..lip_k+llen_k]` are pairwise
                 # distinct (sparse LU column pattern), so the gather/scatter
                 # on `X[i+1]` is alias-free; writes to `bk.Lx[lip_k+p+1]`
