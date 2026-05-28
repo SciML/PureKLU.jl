@@ -463,7 +463,11 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                 Udiag[k+k1+1] = ukk
                 lip_k = Int(Lip_b[k+1])
                 llen_k = Int(Llen_b[k+1])
-                for p in 0:(llen_k-1)
+                # Row indices `bk.Li[lip_k+1..lip_k+llen_k]` are pairwise
+                # distinct (sparse LU column pattern), so the gather/scatter
+                # on `X[i+1]` is alias-free; writes to `bk.Lx[lip_k+p+1]`
+                # are to consecutive slots.
+                @inbounds @simd ivdep for p in 0:(llen_k-1)
                     i = Int(bk.Li[lip_k+p+1])
                     bk.Lx[lip_k+p+1] = _cdiv(X[i+1], ukk, fma_val)
                     X[i+1] = zero(Tv)
