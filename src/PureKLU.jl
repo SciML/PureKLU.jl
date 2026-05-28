@@ -18,6 +18,7 @@ using SparseArrays
 using SparseArrays: SparseMatrixCSC
 using LinearAlgebra
 using MuladdMacro: @muladd  # kept for future opt-in FMA; see src/Kernel.jl
+using PrecompileTools: @setup_workload, @compile_workload
 import SparseArrays: nnz, nonzeros
 import Base: (\), size, getproperty, setproperty!, propertynames, show
 
@@ -568,6 +569,31 @@ function show(io::IO, mime::MIME{Symbol("text/plain")}, K::AbstractKLUFactorizat
         end
     else
         println(io, "Incomplete Factorization, please try `klu_factor!(K)`.")
+    end
+end
+
+# Precompile the four BLAS eltypes (Float64, Float32, ComplexF64, ComplexF32)
+# crossed with the standard index types (Int32, Int64). Generic Real / Complex
+# (e.g. ForwardDiff.Dual, BigFloat) intentionally JIT on first use.
+@setup_workload begin
+    _itypes = sizeof(Int) == 4 ? (Int32,) : (Int32, Int64)
+    @compile_workload begin
+        for Tv in (Float64, Float32, ComplexF64, ComplexF32)
+            for Ti in _itypes
+                colptr = Ti[1, 2, 3, 4, 5, 6, 7, 8, 9]
+                rowval = Ti[1, 2, 3, 4, 5, 6, 7, 8]
+                nzval = ones(Tv, 8)
+                A = SparseMatrixCSC{Tv, Ti}(8, 8, colptr, rowval, nzval)
+                K = klu(A)
+                b = ones(Tv, 8)
+                solve!(K, copy(b))
+                solve!(K', copy(b))
+                solve!(transpose(K), copy(b))
+                klu!(K, A.nzval)
+                klu(A; fully_preallocated=true)
+                klu(A; use_fma=false)
+            end
+        end
     end
 end
 
