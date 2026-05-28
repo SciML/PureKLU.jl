@@ -50,6 +50,8 @@ mutable struct KLUCommon{Ti<:Integer}
     # to the `use_fma` kwarg of [`klu`](@ref); both forms are normalised
     # here.
     use_fma::Union{Val{true}, Val{false}}
+    # `nothing` selects the auto heuristic in `_resolve_fully_preallocated`.
+    fully_preallocated::Union{Bool, Nothing}
 end
 
 function KLUCommon{Ti}() where {Ti<:Integer}
@@ -59,7 +61,8 @@ function KLUCommon{Ti}() where {Ti<:Integer}
         Cint(1), Cint(KLU_OK), Cint(0),
         Ti(EMPTY), Ti(EMPTY), Ti(EMPTY), Ti(0),
         EMPTY_FLOAT, EMPTY_FLOAT, EMPTY_FLOAT, EMPTY_FLOAT, 0.0,
-        Val(true),  # use_fma
+        Val(true),
+        nothing,
     )
     return C
 end
@@ -96,5 +99,11 @@ function klu_defaults!(C::KLUCommon{Ti}) where {Ti}
     C.rgrowth = EMPTY_FLOAT
     C.work = 0.0
     C.use_fma = Val(true)
+    C.fully_preallocated = nothing
     return C
 end
+
+# At nk=64 the hard upper bound `nk*(nk+1)/2 = 2080` entries (~32 KB for
+# Float64+Int64) caps per-block over-allocation; above this, the bound
+# grows O(nk^2) relative to AMD's `Lnz` estimate.
+const AUTO_PREALLOC_MAXBLOCK = 64

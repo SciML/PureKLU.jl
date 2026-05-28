@@ -261,10 +261,10 @@ klu_refactor!(args...; kwargs...) = klu!(args...; kwargs...)
 
 Compute the LU factorisation of a sparse matrix using KLU.
 """
-# The `use_fma` kwarg on every `klu`/`klu_factor!`/... entry point accepts
-# either a `Bool` or a `Val{true}/Val{false}`. Both are normalised to a
-# `Val` internally (via `_as_val`) and stored on `K.common.use_fma`, so
-# dispatch through the kernel hot loops is type-stable end-to-end.
+# The `use_fma` kwarg accepts either a `Bool` or a `Val{true}/Val{false}`.
+# Both are normalised to a `Val` internally (via `_as_val`) and stored on
+# `K.common.use_fma`, so dispatch through the kernel hot loops is type-
+# stable end-to-end.
 #
 #   * `use_fma=true` (default) and `use_fma=Val(true)` are equivalent.
 #   * `use_fma=false` and `use_fma=Val(false)` opt out of FMA fusion and
@@ -272,20 +272,22 @@ Compute the LU factorisation of a sparse matrix using KLU.
 function klu(n::Integer, colptr::Vector{Ti}, rowval::Vector{Ti}, nzval::Vector{Tv};
              check::Bool=true, allowsingular::Bool=false,
              full_factor::Bool=true, use_fma=true,
+             fully_preallocated::Union{Bool, Nothing}=nothing,
              ) where {Ti<:KLUITypes, Tv<:KLUGenericTypes}
     K = KLUFactorization(n, colptr, rowval, nzval)
     K.common.use_fma = _as_val(use_fma)
+    K.common.fully_preallocated = fully_preallocated
     return full_factor ? klu_factor!(K; check, allowsingular) : klu_analyze!(K; check)
 end
 
 function klu(A::SparseMatrixCSC{Tv, Ti}; check::Bool=true,
              allowsingular::Bool=false, full_factor::Bool=true,
-             use_fma=true,
+             use_fma=true, fully_preallocated::Union{Bool, Nothing}=nothing,
              ) where {Tv<:KLUGenericTypes, Ti<:KLUITypes}
     n = size(A, 1)
     n == size(A, 2) || throw(DimensionMismatch())
     return klu(n, decrement(A.colptr), decrement(A.rowval), A.nzval;
-               check, allowsingular, full_factor, use_fma)
+               check, allowsingular, full_factor, use_fma, fully_preallocated)
 end
 
 # --- solve API -------------------------------------------------------------
