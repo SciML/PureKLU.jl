@@ -203,18 +203,41 @@ KLUNumeric{Tv, Ti, Tr}() where {Tv, Ti<:Integer, Tr<:Real} = KLUNumeric{Tv, Ti, 
     Ti[],
 )
 
+# `nk*(nk+1)/2` is a provable upper bound on `block.Li_used + nk` (the
+# kernel's reserve check): column `k` writes at most `nk-1-k` off-
+# diagonals, so the cumulative sum is maximised at `k = nk-1`.  Symmetric
+# for `Ui`.  Sizing to this bound makes `_klu_grow!` provably unreachable.
+@inline function _block_cap(nk::Int, lnz_est::Float64, initmem_amd::Float64,
+                            fully_preallocated::Bool)
+    if fully_preallocated
+        return (nk * (nk + 1)) >>> 1
+    end
+    est = lnz_est
+    if !(est >= 0)
+        est = Float64(nk) * Float64(nk) / 4
+    end
+    return ceil(Int, initmem_amd * est) + nk
+end
+
+@inline function _resolve_fully_preallocated(common::KLUCommon, Sym::KLUSymbolic)
+    fp = common.fully_preallocated
+    fp === nothing || return fp::Bool
+    return Int(Sym.maxblock) <= AUTO_PREALLOC_MAXBLOCK
+end
+
 function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti}) where {Tv, Ti}
+    return _alloc_numeric(Tv, Sym, common,
+                          _resolve_fully_preallocated(common, Sym))
+end
+
+function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti},
+                        fully_preallocated::Bool) where {Tv, Ti}
     n = Int(Sym.n)
     nblocks = Int(Sym.nblocks)
     nzoff = Int(Sym.nzoff)
     maxblock = max(1, Int(Sym.maxblock))
     scale = Int(common.scale)
     Tr = _real_eltype(Tv)
-    # Pre-size each non-singleton block's L/U storage to AMD's Lnz
-    # estimate, scaled by `common.initmem_amd` (default 1.2, matching
-    # SuiteSparse).  COLAMD doesn't supply an estimate, so use the
-    # SuiteSparse fallback `nk*nk/4`.  This means `klu_factor!`'s hot
-    # loop usually never resizes.
     initmem_amd = common.initmem_amd
     LUbx = Vector{KLUNumericBlock{Tv, Ti}}(undef, nblocks)
     @inbounds for b in 1:nblocks
@@ -222,12 +245,7 @@ function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti})
         nk = k2 - k1
         bk = KLUNumericBlock{Tv, Ti}()
         if nk > 1
-            est = Sym.Lnz[b]
-            if !(est >= 0)
-                # COLAMD / unknown: fall back to a coarse upper bound.
-                est = Float64(nk) * Float64(nk) / 4
-            end
-            cap = ceil(Int, initmem_amd * est) + nk
+            cap = _block_cap(nk, Sym.Lnz[b], initmem_amd, fully_preallocated)
             resize!(bk.Li, cap); resize!(bk.Lx, cap)
             resize!(bk.Ui, cap); resize!(bk.Ux, cap)
         end
@@ -870,8 +888,8 @@ function klu_factor!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
                      reuse::KLUNumeric{Tv, Ti};
                      allowsingular::Bool=false,
                      ) where {Tv, Ti}
-    return _klu_factor_impl!(Sym, Ap, Ai, Ax, common, common.use_fma, reuse,
-                             allowsingular)
+    return _klu_factor_impl!(Sym, Ap, Ai, Ax, common, common.use_fma,
+                             reuse, allowsingular)
 end
 
 function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
@@ -884,8 +902,9 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
     common.singular_col = Ti(EMPTY)
     common.noffdiag = Ti(0)
 
-    Num = reuse.n == Sym.n ? _prepare_numeric_for_reuse!(reuse, Sym, common) :
-                             _alloc_numeric(Tv, Sym, common)
+    Num = reuse.n == Sym.n ?
+        _prepare_numeric_for_reuse!(reuse, Sym, common) :
+        _alloc_numeric(Tv, Sym, common)
     n = Int(Sym.n)
     nblocks = Int(Sym.nblocks)
     nzoff = Int(Sym.nzoff)
