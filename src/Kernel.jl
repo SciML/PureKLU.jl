@@ -19,8 +19,8 @@
 #
 # Default is `Val(true)`.  Use `klu(A; use_fma=false)` or set
 # `K.common.use_fma = false` before factoring/solving to opt out.
-@inline _mulsub(a, b, c, ::Val{true})  = muladd(-b, c, a)
-@inline _mulsub(a, b, c, ::Val{false}) = a - b*c
+@inline _mulsub(a, b, c, ::Val{true}) = muladd(-b, c, a)
+@inline _mulsub(a, b, c, ::Val{false}) = a - b * c
 
 # Complex specialisations.  Julia's built-in `*(::Complex, ::Complex)`
 # uses `muladd` internally, so plain `a - b*c` would silently emit FMA
@@ -32,8 +32,10 @@
     ar = real(a); ai = imag(a)
     br = real(b); bi = imag(b)
     cr = real(c); ci = imag(c)
-    return Complex(ar - (br*cr - bi*ci),
-                   ai - (bi*cr + br*ci))
+    return Complex(
+        ar - (br * cr - bi * ci),
+        ai - (bi * cr + br * ci)
+    )
 end
 # For Val(true) we *want* the FMA fusion that Julia's `*` already provides,
 # so the generic `a - b*c` is fine (it'll route through complex_mul +
@@ -53,11 +55,11 @@ end
     if x >= y
         x + y == x && return x
         r = y / x
-        return x * sqrt(1.0 + r*r)
+        return x * sqrt(1.0 + r * r)
     else
         y + x == y && return y
         r = x / y
-        return y * sqrt(1.0 + r*r)
+        return y * sqrt(1.0 + r * r)
     end
 end
 @inline _ssabs(a::Complex, ::Val{true}) = abs(a)
@@ -139,7 +141,7 @@ is the current capacity; `klu_factor!` overwrites the prefix and only
 calls `resize!` on the geometric grow path when the AMD-estimated
 capacity proves insufficient.
 """
-mutable struct KLUNumericBlock{Tv, Ti<:Integer}
+mutable struct KLUNumericBlock{Tv, Ti <: Integer}
     Li::Vector{Ti}
     Lx::Vector{Tv}
     Li_used::Int
@@ -162,7 +164,7 @@ applies.
 """
 _real_eltype(::Type{Tv}) where {Tv} = typeof(real(zero(Tv)))
 
-mutable struct KLUNumeric{Tv, Ti<:Integer, Tr<:Real}
+mutable struct KLUNumeric{Tv, Ti <: Integer, Tr <: Real}
     n::Ti
     nblocks::Ti
     lnz::Ti
@@ -202,7 +204,7 @@ KLUNumeric{Tv, Ti}(args...) where {Tv, Ti} =
 # throughout the package.  Lets `KLUFactorization.numeric` be a concrete
 # non-Union field, and gives `_prepare_numeric_for_reuse!` a uniform path
 # (`n == 0` ⇒ allocate fresh; otherwise reuse buffers).
-KLUNumeric{Tv, Ti, Tr}() where {Tv, Ti<:Integer, Tr<:Real} = KLUNumeric{Tv, Ti, Tr}(
+KLUNumeric{Tv, Ti, Tr}() where {Tv, Ti <: Integer, Tr <: Real} = KLUNumeric{Tv, Ti, Tr}(
     Ti(0), Ti(0), Ti(0), Ti(0), Ti(0), Ti(0),
     Ti[], Ti[], Ti[], Ti[], Ti[], Ti[],
     KLUNumericBlock{Tv, Ti}[],
@@ -236,8 +238,10 @@ const FILL_CEILING_MULT = 28
 # `FILL_CEILING_MULT * innz + nk` ceilings the AMD estimate so structured
 # blocks are not over-allocated.  The ceiling is never applied below `nk`
 # (a single full column) to keep at least a column of slack.
-@inline function _block_cap(nk::Int, lnz_est::Float64, initmem_amd::Float64,
-                            fully_preallocated::Bool, innz::Int)
+@inline function _block_cap(
+        nk::Int, lnz_est::Float64, initmem_amd::Float64,
+        fully_preallocated::Bool, innz::Int
+    )
     if fully_preallocated
         return (nk * (nk + 1)) >>> 1
     end
@@ -250,14 +254,18 @@ const FILL_CEILING_MULT = 28
     return min(cap, max(ceil_cap, nk))
 end
 
-function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti},
-                        Ap::Union{Vector{Ti}, Nothing}=nothing) where {Tv, Ti}
+function _alloc_numeric(
+        ::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti},
+        Ap::Union{Vector{Ti}, Nothing} = nothing
+    ) where {Tv, Ti}
     return _alloc_numeric(Tv, Sym, common, common.fully_preallocated, Ap)
 end
 
-function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti},
-                        fully_preallocated::Bool,
-                        Ap::Union{Vector{Ti}, Nothing}=nothing) where {Tv, Ti}
+function _alloc_numeric(
+        ::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti},
+        fully_preallocated::Bool,
+        Ap::Union{Vector{Ti}, Nothing} = nothing
+    ) where {Tv, Ti}
     n = Int(Sym.n)
     nblocks = Int(Sym.nblocks)
     nzoff = Int(Sym.nzoff)
@@ -268,7 +276,7 @@ function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti},
     Q = Sym.Q
     LUbx = Vector{KLUNumericBlock{Tv, Ti}}(undef, nblocks)
     @inbounds for b in 1:nblocks
-        k1 = Int(Sym.R[b]); k2 = Int(Sym.R[b+1])
+        k1 = Int(Sym.R[b]); k2 = Int(Sym.R[b + 1])
         nk = k2 - k1
         bk = KLUNumericBlock{Tv, Ti}()
         if nk > 1
@@ -279,9 +287,9 @@ function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti},
             innz = nk * nk
             if Ap !== nothing && !fully_preallocated
                 cnt = 0
-                for k in k1:(k2-1)
-                    oldcol = Int(Q[k+1])
-                    cnt += Int(Ap[oldcol+2]) - Int(Ap[oldcol+1])
+                for k in k1:(k2 - 1)
+                    oldcol = Int(Q[k + 1])
+                    cnt += Int(Ap[oldcol + 2]) - Int(Ap[oldcol + 1])
                 end
                 innz = cnt
             end
@@ -319,9 +327,11 @@ end
 # scaling is enabled (matching `_alloc_numeric`'s initial state); other
 # fields are overwritten by the factor proper.  Adjusts the `Rs`/`Xtmp`
 # buffers if `common.scale` changed since the previous factor.
-function _prepare_numeric_for_reuse!(Num::KLUNumeric{Tv, Ti, Tr},
-                                     Sym::KLUSymbolic{Ti},
-                                     common::KLUCommon{Ti}) where {Tv, Ti, Tr}
+function _prepare_numeric_for_reuse!(
+        Num::KLUNumeric{Tv, Ti, Tr},
+        Sym::KLUSymbolic{Ti},
+        common::KLUCommon{Ti}
+    ) where {Tv, Ti, Tr}
     n = Int(Sym.n)
     scale = Int(common.scale)
     if scale > 0
@@ -349,8 +359,10 @@ end
 # `target` is the minimum new capacity required.  We grow by
 # `max(target, ceil(memgrow * current_cap))` so amortised cost stays
 # linear even when AMD's estimate is consistently low.
-@noinline function _klu_grow!(block::KLUNumericBlock{Tv, Ti}, which::Symbol,
-                              target::Int, memgrow::Float64) where {Tv, Ti}
+@noinline function _klu_grow!(
+        block::KLUNumericBlock{Tv, Ti}, which::Symbol,
+        target::Int, memgrow::Float64
+    ) where {Tv, Ti}
     if which === :L
         cur = length(block.Li)
         new = max(target, ceil(Int, memgrow * cur))
@@ -379,20 +391,22 @@ once without paying the row-norm work, and so the refactor path can
 skip the whole walk when `scale == 0` (pattern is unchanged after
 factor).
 """
-function _validate_pattern!(n::Integer,
-                            Ap::Vector{Ti}, Ai::Vector{Ti},
-                            W::Union{Vector{Ti},Nothing},
-                            common::KLUCommon{Ti}) where {Ti}
+function _validate_pattern!(
+        n::Integer,
+        Ap::Vector{Ti}, Ai::Vector{Ti},
+        W::Union{Vector{Ti}, Nothing},
+        common::KLUCommon{Ti}
+    ) where {Ti}
     if n <= 0
         common.status = KLU_INVALID
         return false
     end
-    if Ap[1] != 0 || Ap[n+1] < 0
+    if Ap[1] != 0 || Ap[n + 1] < 0
         common.status = KLU_INVALID
         return false
     end
     for col in 1:n
-        if Ap[col] > Ap[col+1]
+        if Ap[col] > Ap[col + 1]
             common.status = KLU_INVALID
             return false
         end
@@ -404,8 +418,8 @@ function _validate_pattern!(n::Integer,
         end
     end
     for col in 1:n
-        pend = Int(Ap[col+1])
-        for p in (Int(Ap[col])+1):pend
+        pend = Int(Ap[col + 1])
+        for p in (Int(Ap[col]) + 1):pend
             row = Int(Ai[p]) + 1
             if row < 1 || row > n
                 common.status = KLU_INVALID
@@ -430,11 +444,13 @@ Row-scale a matrix in CSC form. `scale = 0` validates the matrix but
 does not scale; `scale = 1` divides each row by its 1-norm; `scale ≥ 2`
 divides by its ∞-norm. Mirrors `klu_scale.c`.
 """
-function klu_scale!(scale::Integer, n::Integer,
-                    Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
-                    Rs::Union{Vector{<:Real},Nothing},
-                    W::Union{Vector{Ti},Nothing},
-                    common::KLUCommon{Ti}) where {Tv, Ti}
+function klu_scale!(
+        scale::Integer, n::Integer,
+        Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
+        Rs::Union{Vector{<:Real}, Nothing},
+        W::Union{Vector{Ti}, Nothing},
+        common::KLUCommon{Ti}
+    ) where {Tv, Ti}
     fma_val = common.use_fma
     common.status = KLU_OK
     scale < 0 && return true
@@ -442,12 +458,12 @@ function klu_scale!(scale::Integer, n::Integer,
         common.status = KLU_INVALID
         return false
     end
-    if Ap[1] != 0 || Ap[n+1] < 0
+    if Ap[1] != 0 || Ap[n + 1] < 0
         common.status = KLU_INVALID
         return false
     end
     for col in 1:n
-        if Ap[col] > Ap[col+1]
+        if Ap[col] > Ap[col + 1]
             common.status = KLU_INVALID
             return false
         end
@@ -466,8 +482,8 @@ function klu_scale!(scale::Integer, n::Integer,
         end
     end
     for col in 1:n
-        pend = Int(Ap[col+1])
-        for p in (Int(Ap[col])+1):pend
+        pend = Int(Ap[col + 1])
+        for p in (Int(Ap[col]) + 1):pend
             row = Int(Ai[p]) + 1
             if row < 1 || row > n
                 common.status = KLU_INVALID
@@ -511,13 +527,15 @@ end
 # indices for column k into `block_Li` at offsets `Lip[k+1]+1 .. Lip[k+1]+l_length`.
 # Returns `(top, l_length)` rather than mutating a Ref so the compiler can
 # keep `l_length` in a register across the inlined call boundary.
-@inline function _kernel_dfs!(j_in::Int, k::Int,
-                      Pinv::Vector{Ti}, Llen::AbstractVector{Ti}, Lip::AbstractVector{Ti},
-                      Stack::Vector{Ti}, Flag::Vector{Ti}, Lpend::Vector{Ti},
-                      top_in::Int,
-                      block_Li::Vector{Ti}, Lip_k::Int,
-                      l_length::Int,
-                      Ap_pos::Vector{Ti}) where {Ti}
+@inline function _kernel_dfs!(
+        j_in::Int, k::Int,
+        Pinv::Vector{Ti}, Llen::AbstractVector{Ti}, Lip::AbstractVector{Ti},
+        Stack::Vector{Ti}, Flag::Vector{Ti}, Lpend::Vector{Ti},
+        top_in::Int,
+        block_Li::Vector{Ti}, Lip_k::Int,
+        l_length::Int,
+        Ap_pos::Vector{Ti}
+    ) where {Ti}
     head = 0
     @inbounds Stack[1] = Ti(j_in)
     top = top_in
@@ -532,31 +550,31 @@ end
     j = j_in
     @label restart
     @inbounds begin
-        jnew = Int(Pinv[j+1])
-        lip_jnew = Int(Lip[jnew+1])
-        if Flag[j+1] != kT
-            Flag[j+1] = kT
-            lp = Lpend[jnew+1]
-            pos = Int((lp == emptyT) ? Llen[jnew+1] : lp) - 1
+        jnew = Int(Pinv[j + 1])
+        lip_jnew = Int(Lip[jnew + 1])
+        if Flag[j + 1] != kT
+            Flag[j + 1] = kT
+            lp = Lpend[jnew + 1]
+            pos = Int((lp == emptyT) ? Llen[jnew + 1] : lp) - 1
         else
-            pos = Int(Ap_pos[head+1]) - 1
+            pos = Int(Ap_pos[head + 1]) - 1
         end
         while true
             broke = false
             while pos >= 0
                 i = Int(block_Li[lip_jnew + pos + 1])
-                if Flag[i+1] != kT
-                    if Pinv[i+1] >= 0
+                if Flag[i + 1] != kT
+                    if Pinv[i + 1] >= 0
                         # Push child `i`: save our resume cursor, then restart
                         # with the child as the new top-of-stack node.
-                        Ap_pos[head+1] = Ti(pos)
+                        Ap_pos[head + 1] = Ti(pos)
                         head += 1
-                        Stack[head+1] = Ti(i)
+                        Stack[head + 1] = Ti(i)
                         j = i
                         broke = true
                         break
                     else
-                        Flag[i+1] = kT
+                        Flag[i + 1] = kT
                         block_Li[Lip_k + l_length + 1] = Ti(i)
                         l_length += 1
                     end
@@ -567,51 +585,55 @@ end
             # Node fully explored: emit it and pop.
             head -= 1
             top -= 1
-            Stack[top+1] = Ti(j)
+            Stack[top + 1] = Ti(j)
             head < 0 && break
-            j = Int(Stack[head+1])
-            jnew = Int(Pinv[j+1])
-            lip_jnew = Int(Lip[jnew+1])
-            pos = Int(Ap_pos[head+1]) - 1
+            j = Int(Stack[head + 1])
+            jnew = Int(Pinv[j + 1])
+            lip_jnew = Int(Lip[jnew + 1])
+            pos = Int(Ap_pos[head + 1]) - 1
         end
     end
     return top, l_length
 end
 
 # Port of klu_kernel.c::lsolve_symbolic
-function _kernel_lsolve_symbolic!(n::Int, k::Int,
-                                  Ap::Vector{Ti}, Ai::Vector{Ti}, Q::Vector{Ti},
-                                  Pinv::Vector{Ti}, Stack::Vector{Ti},
-                                  Flag::Vector{Ti}, Lpend::Vector{Ti},
-                                  Ap_pos::Vector{Ti},
-                                  block_Li::Vector{Ti},
-                                  Llen::AbstractVector{Ti}, Lip::AbstractVector{Ti},
-                                  k1::Int, PSinv::Vector{Ti}) where {Ti}
+function _kernel_lsolve_symbolic!(
+        n::Int, k::Int,
+        Ap::Vector{Ti}, Ai::Vector{Ti}, Q::Vector{Ti},
+        Pinv::Vector{Ti}, Stack::Vector{Ti},
+        Flag::Vector{Ti}, Lpend::Vector{Ti},
+        Ap_pos::Vector{Ti},
+        block_Li::Vector{Ti},
+        Llen::AbstractVector{Ti}, Lip::AbstractVector{Ti},
+        k1::Int, PSinv::Vector{Ti}
+    ) where {Ti}
     top = n
     l_length = 0
     kglobal = k + k1
-    @inbounds Lip_k = Int(Lip[k+1])
-    @inbounds oldcol = Int(Q[kglobal+1])
-    @inbounds pend = Int(Ap[oldcol+2])
-    @inbounds pstart = Int(Ap[oldcol+1])
+    @inbounds Lip_k = Int(Lip[k + 1])
+    @inbounds oldcol = Int(Q[kglobal + 1])
+    @inbounds pend = Int(Ap[oldcol + 2])
+    @inbounds pstart = Int(Ap[oldcol + 1])
     kT = Ti(k)
-    @inbounds for p in pstart:(pend-1)
-        i = Int(PSinv[Int(Ai[p+1])+1]) - k1
+    @inbounds for p in pstart:(pend - 1)
+        i = Int(PSinv[Int(Ai[p + 1]) + 1]) - k1
         if i < 0
             continue
         end
-        if Flag[i+1] != kT
-            if Pinv[i+1] >= 0
-                top, l_length = _kernel_dfs!(i, k, Pinv, Llen, Lip, Stack, Flag, Lpend,
-                                             top, block_Li, Lip_k, l_length, Ap_pos)
+        if Flag[i + 1] != kT
+            if Pinv[i + 1] >= 0
+                top, l_length = _kernel_dfs!(
+                    i, k, Pinv, Llen, Lip, Stack, Flag, Lpend,
+                    top, block_Li, Lip_k, l_length, Ap_pos
+                )
             else
-                Flag[i+1] = kT
+                Flag[i + 1] = kT
                 block_Li[Lip_k + l_length + 1] = Ti(i)
                 l_length += 1
             end
         end
     end
-    @inbounds Llen[k+1] = Ti(l_length)
+    @inbounds Llen[k + 1] = Ti(l_length)
     return top
 end
 
@@ -619,42 +641,44 @@ end
 # `(scale_val, fma_val)` so each instantiation collapses to the
 # appropriate inner loop with no per-iteration test (matches the
 # monomorphic C compile).
-@inline function _kernel_construct_column!(k::Int, Ap::Vector{Ti}, Ai::Vector{Ti},
-                                           Ax::Vector{Tv}, Q::Vector{Ti}, X::Vector{Tv},
-                                           k1::Int, PSinv::Vector{Ti},
-                                           Rs::Vector{Tr},
-                                           scale_val::Val,
-                                           Offp::Vector{Ti}, Offi::Vector{Ti},
-                                           Offx::Vector{Tv}) where {Tv, Ti, Tr<:Real}
+@inline function _kernel_construct_column!(
+        k::Int, Ap::Vector{Ti}, Ai::Vector{Ti},
+        Ax::Vector{Tv}, Q::Vector{Ti}, X::Vector{Tv},
+        k1::Int, PSinv::Vector{Ti},
+        Rs::Vector{Tr},
+        scale_val::Val,
+        Offp::Vector{Ti}, Offi::Vector{Ti},
+        Offx::Vector{Tv}
+    ) where {Tv, Ti, Tr <: Real}
     kglobal = k + k1
-    @inbounds poff = Int(Offp[kglobal+1])
-    @inbounds oldcol = Int(Q[kglobal+1])
-    @inbounds pend = Int(Ap[oldcol+2])
-    @inbounds pstart = Int(Ap[oldcol+1])
+    @inbounds poff = Int(Offp[kglobal + 1])
+    @inbounds oldcol = Int(Q[kglobal + 1])
+    @inbounds pend = Int(Ap[oldcol + 2])
+    @inbounds pstart = Int(Ap[oldcol + 1])
     if scale_val === Val(false)
-        @inbounds for p in pstart:(pend-1)
-            oldrow = Int(Ai[p+1])
-            i = Int(PSinv[oldrow+1]) - k1
-            aik = Ax[p+1]
+        @inbounds for p in pstart:(pend - 1)
+            oldrow = Int(Ai[p + 1])
+            i = Int(PSinv[oldrow + 1]) - k1
+            aik = Ax[p + 1]
             if i < 0
-                Offi[poff+1] = Ti(oldrow); Offx[poff+1] = aik; poff += 1
+                Offi[poff + 1] = Ti(oldrow); Offx[poff + 1] = aik; poff += 1
             else
-                X[i+1] = aik
+                X[i + 1] = aik
             end
         end
     else
-        @inbounds for p in pstart:(pend-1)
-            oldrow = Int(Ai[p+1])
-            i = Int(PSinv[oldrow+1]) - k1
-            aik = Ax[p+1] / Rs[oldrow+1]
+        @inbounds for p in pstart:(pend - 1)
+            oldrow = Int(Ai[p + 1])
+            i = Int(PSinv[oldrow + 1]) - k1
+            aik = Ax[p + 1] / Rs[oldrow + 1]
             if i < 0
-                Offi[poff+1] = Ti(oldrow); Offx[poff+1] = aik; poff += 1
+                Offi[poff + 1] = Ti(oldrow); Offx[poff + 1] = aik; poff += 1
             else
-                X[i+1] = aik
+                X[i + 1] = aik
             end
         end
     end
-    @inbounds Offp[kglobal+2] = Ti(poff)
+    @inbounds Offp[kglobal + 2] = Ti(poff)
     return nothing
 end
 
@@ -676,43 +700,47 @@ end
 # When `fma_val == Val(true)` (default) we use `muladd`, which LLVM
 # lowers to `vfnmadd*sd` on hardware with FMA -- one rounding, slightly
 # more accurate, but L/U entries can differ from KLU.jl by 1 ULP.
-function _kernel_lsolve_numeric!(Pinv::Vector{Ti},
-                                 block_Li::Vector{Ti}, block_Lx::Vector{Tv},
-                                 Stack::Vector{Ti}, Lip::AbstractVector{Ti},
-                                 top::Int, n::Int, Llen::AbstractVector{Ti},
-                                 X::Vector{Tv}, fma_val::Val) where {Tv, Ti}
-    @inbounds for s in top:(n-1)
-        j = Int(Stack[s+1])
-        jnew = Int(Pinv[j+1])
-        xj = X[j+1]
-        lip = Int(Lip[jnew+1])
-        len = Int(Llen[jnew+1])
+function _kernel_lsolve_numeric!(
+        Pinv::Vector{Ti},
+        block_Li::Vector{Ti}, block_Lx::Vector{Tv},
+        Stack::Vector{Ti}, Lip::AbstractVector{Ti},
+        top::Int, n::Int, Llen::AbstractVector{Ti},
+        X::Vector{Tv}, fma_val::Val
+    ) where {Tv, Ti}
+    return @inbounds for s in top:(n - 1)
+        j = Int(Stack[s + 1])
+        jnew = Int(Pinv[j + 1])
+        xj = X[j + 1]
+        lip = Int(Lip[jnew + 1])
+        len = Int(Llen[jnew + 1])
         # `block_Li[lip..lip+len-1]` are the row indices for one column of L,
         # which are pairwise distinct by construction (sparse LU never inserts
         # a row twice into a column).  The compiler can't see that, so we
         # promise it via `@simd ivdep` -- the scatter `X[i] -= ...` has no
         # loop-carried memory dependency.
-        @simd ivdep for p in 0:(len-1)
-            i = Int(block_Li[lip+p+1])
-            X[i+1] = _mulsub(X[i+1], block_Lx[lip+p+1], xj, fma_val)
+        @simd ivdep for p in 0:(len - 1)
+            i = Int(block_Li[lip + p + 1])
+            X[i + 1] = _mulsub(X[i + 1], block_Lx[lip + p + 1], xj, fma_val)
         end
     end
 end
 
 # Port of klu_kernel.c::lpivot
-function _kernel_lpivot!(diagrow::Int, k::Int, n::Int,
-                         tol::Float64, X::Vector{Tv},
-                         block_Li::Vector{Ti}, block_Lx::Vector{Tv},
-                         Lip::AbstractVector{Ti}, Llen::AbstractVector{Ti},
-                         Pinv::Vector{Ti}, firstrow_ref::Base.RefValue{Int},
-                         common::KLUCommon{Ti}, fma_val::Val) where {Tv, Ti}
+function _kernel_lpivot!(
+        diagrow::Int, k::Int, n::Int,
+        tol::Float64, X::Vector{Tv},
+        block_Li::Vector{Ti}, block_Lx::Vector{Tv},
+        Lip::AbstractVector{Ti}, Llen::AbstractVector{Ti},
+        Pinv::Vector{Ti}, firstrow_ref::Base.RefValue{Int},
+        common::KLUCommon{Ti}, fma_val::Val
+    ) where {Tv, Ti}
     Tr = _real_eltype(Tv)
-    if Llen[k+1] == 0
+    if Llen[k + 1] == 0
         if common.halt_if_singular != 0
             return false, -1, zero(Tv), zero(Tr)
         end
-        for firstrow in firstrow_ref[]:(n-1)
-            if Pinv[firstrow+1] < 0
+        for firstrow in firstrow_ref[]:(n - 1)
+            if Pinv[firstrow + 1] < 0
                 firstrow_ref[] = firstrow
                 # Clear X at any non-pivotal row (matches C's behavior to leave X zero)
                 return false, firstrow, zero(Tv), zero(Tr)
@@ -724,19 +752,19 @@ function _kernel_lpivot!(diagrow::Int, k::Int, n::Int,
     pdiag = -1
     ppivrow = -1
     abs_pivot = -one(Tr)
-    @inbounds lip = Int(Lip[k+1])
-    @inbounds len_full = Int(Llen[k+1])
+    @inbounds lip = Int(Lip[k + 1])
+    @inbounds len_full = Int(Llen[k + 1])
     @inbounds last_row_index = Int(block_Li[lip + len_full])
 
-    @inbounds Llen[k+1] = Ti(len_full - 1)
+    @inbounds Llen[k + 1] = Ti(len_full - 1)
     len = len_full - 1
     diagrowT = Ti(diagrow)
 
-    @inbounds for p in 0:(len-1)
-        i = block_Li[lip+p+1]
-        x = X[Int(i)+1]
-        X[Int(i)+1] = zero(Tv)
-        block_Lx[lip+p+1] = x
+    @inbounds for p in 0:(len - 1)
+        i = block_Li[lip + p + 1]
+        x = X[Int(i) + 1]
+        X[Int(i) + 1] = zero(Tv)
+        block_Lx[lip + p + 1] = x
         xabs = abs(x)
         pdiag = ifelse(i == diagrowT, p, pdiag)
         if xabs > abs_pivot
@@ -745,7 +773,7 @@ function _kernel_lpivot!(diagrow::Int, k::Int, n::Int,
         end
     end
 
-    xabs_last = abs(X[last_row_index+1])
+    xabs_last = abs(X[last_row_index + 1])
     if xabs_last > abs_pivot
         abs_pivot = xabs_last
         ppivrow = -1
@@ -770,12 +798,12 @@ function _kernel_lpivot!(diagrow::Int, k::Int, n::Int,
         pivrow = Int(block_Li[lip + ppivrow + 1])
         pivot = block_Lx[lip + ppivrow + 1]
         block_Li[lip + ppivrow + 1] = Ti(last_row_index)
-        block_Lx[lip + ppivrow + 1] = X[last_row_index+1]
+        block_Lx[lip + ppivrow + 1] = X[last_row_index + 1]
     else
         pivrow = last_row_index
-        pivot = X[last_row_index+1]
+        pivot = X[last_row_index + 1]
     end
-    X[last_row_index+1] = zero(Tv)
+    X[last_row_index + 1] = zero(Tv)
 
     if iszero(pivot) && common.halt_if_singular != 0
         return false, pivrow, pivot, abs_pivot
@@ -784,31 +812,33 @@ function _kernel_lpivot!(diagrow::Int, k::Int, n::Int,
     # Scaling pass: each entry is divided by the same pivot, no cross-iteration
     # dependency.  `@simd ivdep` is safe because the writes are to consecutive
     # storage locations.  `len` equals the post-decrement `Llen[k+1]`.
-    @inbounds @simd ivdep for p in 0:(len-1)
-        block_Lx[lip+p+1] = _cdiv(block_Lx[lip+p+1], pivot, fma_val)
+    @inbounds @simd ivdep for p in 0:(len - 1)
+        block_Lx[lip + p + 1] = _cdiv(block_Lx[lip + p + 1], pivot, fma_val)
     end
 
     return true, pivrow, pivot, abs_pivot
 end
 
 # Port of klu_kernel.c::prune
-function _kernel_prune!(Lpend::Vector{Ti}, Pinv::Vector{Ti}, k::Int, pivrow::Int,
-                        block_Li::Vector{Ti}, block_Lx::Vector{Tv},
-                        block_Ui::Vector{Ti},
-                        Uip::AbstractVector{Ti}, Lip::AbstractVector{Ti},
-                        Ulen::AbstractVector{Ti}, Llen::AbstractVector{Ti}) where {Tv, Ti}
-    @inbounds uip_k = Int(Uip[k+1])
-    @inbounds ulen_k = Int(Ulen[k+1])
+function _kernel_prune!(
+        Lpend::Vector{Ti}, Pinv::Vector{Ti}, k::Int, pivrow::Int,
+        block_Li::Vector{Ti}, block_Lx::Vector{Tv},
+        block_Ui::Vector{Ti},
+        Uip::AbstractVector{Ti}, Lip::AbstractVector{Ti},
+        Ulen::AbstractVector{Ti}, Llen::AbstractVector{Ti}
+    ) where {Tv, Ti}
+    @inbounds uip_k = Int(Uip[k + 1])
+    @inbounds ulen_k = Int(Ulen[k + 1])
     emptyT = Ti(EMPTY)
     pivrowT = Ti(pivrow)
-    @inbounds for p in 0:(ulen_k-1)
-        j = Int(block_Ui[uip_k+p+1])
-        if Lpend[j+1] == emptyT
-            lip_j = Int(Lip[j+1])
-            llen_j = Int(Llen[j+1])
+    return @inbounds for p in 0:(ulen_k - 1)
+        j = Int(block_Ui[uip_k + p + 1])
+        if Lpend[j + 1] == emptyT
+            lip_j = Int(Lip[j + 1])
+            llen_j = Int(Llen[j + 1])
             found = -1
-            for p2 in 0:(llen_j-1)
-                if block_Li[lip_j+p2+1] == pivrowT
+            for p2 in 0:(llen_j - 1)
+                if block_Li[lip_j + p2 + 1] == pivrowT
                     found = p2
                     break
                 end
@@ -817,19 +847,19 @@ function _kernel_prune!(Lpend::Vector{Ti}, Pinv::Vector{Ti}, k::Int, pivrow::Int
                 phead = 0
                 ptail = llen_j
                 while phead < ptail
-                    i = block_Li[lip_j+phead+1]
-                    if Pinv[Int(i)+1] >= 0
+                    i = block_Li[lip_j + phead + 1]
+                    if Pinv[Int(i) + 1] >= 0
                         phead += 1
                     else
                         ptail -= 1
-                        block_Li[lip_j+phead+1] = block_Li[lip_j+ptail+1]
-                        block_Li[lip_j+ptail+1] = i
-                        x = block_Lx[lip_j+phead+1]
-                        block_Lx[lip_j+phead+1] = block_Lx[lip_j+ptail+1]
-                        block_Lx[lip_j+ptail+1] = x
+                        block_Li[lip_j + phead + 1] = block_Li[lip_j + ptail + 1]
+                        block_Li[lip_j + ptail + 1] = i
+                        x = block_Lx[lip_j + phead + 1]
+                        block_Lx[lip_j + phead + 1] = block_Lx[lip_j + ptail + 1]
+                        block_Lx[lip_j + ptail + 1] = x
                     end
                 end
-                Lpend[j+1] = Ti(ptail)
+                Lpend[j + 1] = Ti(ptail)
             end
         end
     end
@@ -846,19 +876,21 @@ outside the current block are appended to `Offp`/`Offi`/`Offx`.
 `Lip`/`Llen`/`Uip`/`Ulen`/`Udiag` are views into the global per-column
 tables (sliced to the current block) and are modified in place.
 """
-function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
-                    Q::Vector{Ti},
-                    block::KLUNumericBlock{Tv, Ti},
-                    Udiag::AbstractVector{Tv},
-                    Llen::AbstractVector{Ti}, Ulen::AbstractVector{Ti},
-                    Lip::AbstractVector{Ti}, Uip::AbstractVector{Ti},
-                    Pblock::Vector{Ti},
-                    wk::KernelWorkspace{Tv, Ti},
-                    k1::Int, PSinv::Vector{Ti},
-                    Rs::Vector{Tr},
-                    scale_val::Val,
-                    Offp::Vector{Ti}, Offi::Vector{Ti}, Offx::Vector{Tv},
-                    common::KLUCommon{Ti}, fma_val::Val) where {Tv, Ti, Tr<:Real}
+function klu_kernel!(
+        nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
+        Q::Vector{Ti},
+        block::KLUNumericBlock{Tv, Ti},
+        Udiag::AbstractVector{Tv},
+        Llen::AbstractVector{Ti}, Ulen::AbstractVector{Ti},
+        Lip::AbstractVector{Ti}, Uip::AbstractVector{Ti},
+        Pblock::Vector{Ti},
+        wk::KernelWorkspace{Tv, Ti},
+        k1::Int, PSinv::Vector{Ti},
+        Rs::Vector{Tr},
+        scale_val::Val,
+        Offp::Vector{Ti}, Offi::Vector{Ti}, Offx::Vector{Tv},
+        common::KLUCommon{Ti}, fma_val::Val
+    ) where {Tv, Ti, Tr <: Real}
     n = nk
     tol = common.tol
     @inbounds for k in 1:n
@@ -867,8 +899,8 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
         wk.Lpend[k] = Ti(EMPTY)
     end
     @inbounds for k in 1:n
-        Pblock[k] = Ti(k-1)
-        wk.Pinv[k] = Ti(_kflip(k-1))
+        Pblock[k] = Ti(k - 1)
+        wk.Pinv[k] = Ti(_kflip(k - 1))
     end
 
     # Reset per-block used counts.  The underlying Vector capacities are
@@ -883,31 +915,39 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
     firstrow_ref = wk.firstrow_ref
     firstrow_ref[] = 0
 
-    for k in 0:(n-1)
+    for k in 0:(n - 1)
         # Reserve `n` slots for column k's L pattern.  If capacity is
         # insufficient, grow geometrically; otherwise just record the
         # starting offset.
         old_len = block.Li_used
-        @inbounds Lip[k+1] = Ti(old_len)
+        @inbounds Lip[k + 1] = Ti(old_len)
         if old_len + n > length(block.Li)
             _klu_grow!(block, :L, old_len + n, memgrow)
         end
 
-        top = _kernel_lsolve_symbolic!(n, k, Ap, Ai, Q, wk.Pinv, wk.Stack,
-                                       wk.Flag, wk.Lpend, wk.Ap_pos,
-                                       block.Li, Llen, Lip, k1, PSinv)
+        top = _kernel_lsolve_symbolic!(
+            n, k, Ap, Ai, Q, wk.Pinv, wk.Stack,
+            wk.Flag, wk.Lpend, wk.Ap_pos,
+            block.Li, Llen, Lip, k1, PSinv
+        )
 
-        _kernel_construct_column!(k, Ap, Ai, Ax, Q, wk.X, k1, PSinv,
-                                  Rs, scale_val,
-                                  Offp, Offi, Offx)
-        _kernel_lsolve_numeric!(wk.Pinv, block.Li, block.Lx, wk.Stack, Lip,
-                                top, n, Llen, wk.X, fma_val)
+        _kernel_construct_column!(
+            k, Ap, Ai, Ax, Q, wk.X, k1, PSinv,
+            Rs, scale_val,
+            Offp, Offi, Offx
+        )
+        _kernel_lsolve_numeric!(
+            wk.Pinv, block.Li, block.Lx, wk.Stack, Lip,
+            top, n, Llen, wk.X, fma_val
+        )
 
-        @inbounds diagrow = Int(Pblock[k+1])
-        ok, pivrow, pivot, _ = _kernel_lpivot!(diagrow, k, n, tol, wk.X,
-                                               block.Li, block.Lx, Lip, Llen,
-                                               wk.Pinv, firstrow_ref, common,
-                                               fma_val)
+        @inbounds diagrow = Int(Pblock[k + 1])
+        ok, pivrow, pivot, _ = _kernel_lpivot!(
+            diagrow, k, n, tol, wk.X,
+            block.Li, block.Lx, Lip, Llen,
+            wk.Pinv, firstrow_ref, common,
+            fma_val
+        )
         if !ok
             common.status = KLU_SINGULAR
             if common.numerical_rank == Ti(EMPTY)
@@ -921,43 +961,45 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
 
         # Record actual L slots used (no shrink -- the slack is just
         # unused capacity for the next column).
-        @inbounds lip_k = Int(Lip[k+1])
-        @inbounds llen_k = Int(Llen[k+1])
+        @inbounds lip_k = Int(Lip[k + 1])
+        @inbounds llen_k = Int(Llen[k + 1])
         block.Li_used = lip_k + llen_k
 
         # Build U for this column from Stack[top..n-1] and X.  Index-write
         # path: reserve `ulen` slots after the current used prefix.
         u_off = block.Ui_used
-        @inbounds Uip[k+1] = Ti(u_off)
+        @inbounds Uip[k + 1] = Ti(u_off)
         ulen = n - top
-        @inbounds Ulen[k+1] = Ti(ulen)
+        @inbounds Ulen[k + 1] = Ti(ulen)
         if u_off + ulen > length(block.Ui)
             _klu_grow!(block, :U, u_off + ulen, memgrow)
         end
-        @inbounds for s in top:(n-1)
-            j = Int(wk.Stack[s+1])
+        @inbounds for s in top:(n - 1)
+            j = Int(wk.Stack[s + 1])
             idx = u_off + (s - top) + 1
-            block.Ui[idx] = wk.Pinv[j+1]
-            block.Ux[idx] = wk.X[j+1]
-            wk.X[j+1] = zero(Tv)
+            block.Ui[idx] = wk.Pinv[j + 1]
+            block.Ux[idx] = wk.X[j + 1]
+            wk.X[j + 1] = zero(Tv)
         end
         block.Ui_used = u_off + ulen
 
-        Udiag[k+1] = pivot
+        Udiag[k + 1] = pivot
 
         if pivrow != diagrow
             common.noffdiag += Ti(1)
-            if wk.Pinv[diagrow+1] < 0
-                kbar = _kflip(Int(wk.Pinv[pivrow+1]))
-                Pblock[kbar+1] = Ti(diagrow)
-                wk.Pinv[diagrow+1] = Ti(_kflip(kbar))
+            if wk.Pinv[diagrow + 1] < 0
+                kbar = _kflip(Int(wk.Pinv[pivrow + 1]))
+                Pblock[kbar + 1] = Ti(diagrow)
+                wk.Pinv[diagrow + 1] = Ti(_kflip(kbar))
             end
         end
-        Pblock[k+1] = Ti(pivrow)
-        wk.Pinv[pivrow+1] = Ti(k)
+        Pblock[k + 1] = Ti(pivrow)
+        wk.Pinv[pivrow + 1] = Ti(k)
 
-        _kernel_prune!(wk.Lpend, wk.Pinv, k, pivrow, block.Li, block.Lx,
-                       block.Ui, Uip, Lip, Ulen, Llen)
+        _kernel_prune!(
+            wk.Lpend, wk.Pinv, k, pivrow, block.Li, block.Lx,
+            block.Ui, Uip, Lip, Ulen, Llen
+        )
 
         lnz += llen_k + 1
         unz += ulen + 1
@@ -966,11 +1008,11 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
     # Remap L row indices using the final Pinv.  Each iteration updates a
     # distinct slot in block.Li (consecutive `p` values), so the writes
     # don't alias the reads in a later iteration.  Safe to vectorise.
-    @inbounds for k in 0:(n-1)
-        lip_k = Int(Lip[k+1])
-        llen_k = Int(Llen[k+1])
-        @simd ivdep for p in 0:(llen_k-1)
-            block.Li[lip_k+p+1] = Ti(wk.Pinv[Int(block.Li[lip_k+p+1])+1])
+    @inbounds for k in 0:(n - 1)
+        lip_k = Int(Lip[k + 1])
+        llen_k = Int(Llen[k + 1])
+        @simd ivdep for p in 0:(llen_k - 1)
+            block.Li[lip_k + p + 1] = Ti(wk.Pinv[Int(block.Li[lip_k + p + 1]) + 1])
         end
     end
 
@@ -984,15 +1026,18 @@ Top-level numeric factorisation. Builds a `KLUNumeric`, scales the input
 if requested and dispatches each BTF block either to a singleton path or
 to `klu_kernel!`.
 """
-function klu_factor!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
-                     Ax::Vector{Tv}, common::KLUCommon{Ti};
-                     allowsingular::Bool=false,
-                     ) where {Tv, Ti}
+function klu_factor!(
+        Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
+        Ax::Vector{Tv}, common::KLUCommon{Ti};
+        allowsingular::Bool = false,
+    ) where {Tv, Ti}
     Tr = _real_eltype(Tv)
     scale_val = Int(common.scale) > 0 ? Val(true) : Val(false)
-    return _klu_factor_impl!(Sym, Ap, Ai, Ax, common, common.use_fma,
-                             KLUNumeric{Tv, Ti, Tr}(), allowsingular,
-                             scale_val)
+    return _klu_factor_impl!(
+        Sym, Ap, Ai, Ax, common, common.use_fma,
+        KLUNumeric{Tv, Ti, Tr}(), allowsingular,
+        scale_val
+    )
 end
 
 # Variant that reuses an existing `KLUNumeric` (its block capacities and
@@ -1001,22 +1046,27 @@ end
 # (possible) geometric grow path in the kernel.  Pass an empty
 # `KLUNumeric{Tv, Ti, Tr}()` (the default field value on a fresh
 # `KLUFactorization`) on the cold call.
-function klu_factor!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
-                     Ax::Vector{Tv}, common::KLUCommon{Ti},
-                     reuse::KLUNumeric{Tv, Ti};
-                     allowsingular::Bool=false,
-                     ) where {Tv, Ti}
+function klu_factor!(
+        Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
+        Ax::Vector{Tv}, common::KLUCommon{Ti},
+        reuse::KLUNumeric{Tv, Ti};
+        allowsingular::Bool = false,
+    ) where {Tv, Ti}
     scale_val = Int(common.scale) > 0 ? Val(true) : Val(false)
-    return _klu_factor_impl!(Sym, Ap, Ai, Ax, common, common.use_fma,
-                             reuse, allowsingular, scale_val)
+    return _klu_factor_impl!(
+        Sym, Ap, Ai, Ax, common, common.use_fma,
+        reuse, allowsingular, scale_val
+    )
 end
 
-function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
-                           Ax::Vector{Tv}, common::KLUCommon{Ti},
-                           fma_val::Val,
-                           reuse::KLUNumeric{Tv, Ti, Tr},
-                           allowsingular::Bool,
-                           scale_val::Val) where {Tv, Ti, Tr}
+function _klu_factor_impl!(
+        Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
+        Ax::Vector{Tv}, common::KLUCommon{Ti},
+        fma_val::Val,
+        reuse::KLUNumeric{Tv, Ti, Tr},
+        allowsingular::Bool,
+        scale_val::Val
+    ) where {Tv, Ti, Tr}
     common.status = KLU_OK
     common.numerical_rank = Ti(EMPTY)
     common.singular_col = Ti(EMPTY)
@@ -1035,15 +1085,17 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
 
     Pinv = Num.Pinv
     @inbounds for k in 1:n
-        Pinv[Int(P[k])+1] = Ti(k-1)
+        Pinv[Int(P[k]) + 1] = Ti(k - 1)
     end
 
     scale = Int(common.scale)
     if scale > 0
-        ok = klu_scale!(scale, n, Ap, Ai, Ax,
-                        Num.Rs,
-                        Num.Pnum,
-                        common)
+        ok = klu_scale!(
+            scale, n, Ap, Ai, Ax,
+            Num.Rs,
+            Num.Pnum,
+            common
+        )
         if !ok
             return Num
         end
@@ -1063,29 +1115,31 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
 
     for block in 1:nblocks
         k1 = Int(R[block])
-        k2 = Int(R[block+1])
+        k2 = Int(R[block + 1])
         nk = k2 - k1
 
         if nk == 1
-            poff = Int(Num.Offp[k1+1])
-            oldcol = Int(Q[k1+1])
-            pend = Int(Ap[oldcol+2])
+            poff = Int(Num.Offp[k1 + 1])
+            oldcol = Int(Q[k1 + 1])
+            pend = Int(Ap[oldcol + 2])
             s = zero(Tv)
-            for p in Int(Ap[oldcol+1]):(pend-1)
-                oldrow = Int(Ai[p+1])
-                newrow = Int(Pinv[oldrow+1])
-                aik = _scale_aik(Ax[p+1],
-                                 _rs_at(Num.Rs, oldrow+1, scale_val),
-                                 scale_val)
+            for p in Int(Ap[oldcol + 1]):(pend - 1)
+                oldrow = Int(Ai[p + 1])
+                newrow = Int(Pinv[oldrow + 1])
+                aik = _scale_aik(
+                    Ax[p + 1],
+                    _rs_at(Num.Rs, oldrow + 1, scale_val),
+                    scale_val
+                )
                 if newrow < k1
-                    Num.Offi[poff+1] = Ti(oldrow)
-                    Num.Offx[poff+1] = aik
+                    Num.Offi[poff + 1] = Ti(oldrow)
+                    Num.Offx[poff + 1] = aik
                     poff += 1
                 else
                     s = aik
                 end
             end
-            Num.Udiag[k1+1] = s
+            Num.Udiag[k1 + 1] = s
             if iszero(s)
                 common.status = KLU_SINGULAR
                 if common.numerical_rank == Ti(EMPTY)
@@ -1096,23 +1150,23 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
                     return Num
                 end
             end
-            Num.Offp[k1+2] = Ti(poff)
-            Num.Pnum[k1+1] = P[k1+1]
-            Num.Lip[k1+1] = Ti(0)
-            Num.Uip[k1+1] = Ti(0)
-            Num.Llen[k1+1] = Ti(0)
-            Num.Ulen[k1+1] = Ti(0)
+            Num.Offp[k1 + 2] = Ti(poff)
+            Num.Pnum[k1 + 1] = P[k1 + 1]
+            Num.Lip[k1 + 1] = Ti(0)
+            Num.Uip[k1 + 1] = Ti(0)
+            Num.Llen[k1 + 1] = Ti(0)
+            Num.Ulen[k1 + 1] = Ti(0)
             lnz_total += 1
             unz_total += 1
         else
             block_lnz, block_unz = klu_kernel!(
                 nk, Ap, Ai, Ax, Q,
                 Num.LUbx[block],
-                view(Num.Udiag, k1+1:k2),
-                view(Num.Llen, k1+1:k2),
-                view(Num.Ulen, k1+1:k2),
-                view(Num.Lip, k1+1:k2),
-                view(Num.Uip, k1+1:k2),
+                view(Num.Udiag, (k1 + 1):k2),
+                view(Num.Llen, (k1 + 1):k2),
+                view(Num.Ulen, (k1 + 1):k2),
+                view(Num.Lip, (k1 + 1):k2),
+                view(Num.Uip, (k1 + 1):k2),
                 Pblock,
                 wk, k1, Pinv, Num.Rs, scale_val,
                 Num.Offp, Num.Offi, Num.Offx,
@@ -1120,7 +1174,7 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
             )
 
             if common.status < KLU_OK ||
-               (common.status == KLU_SINGULAR && common.halt_if_singular != 0)
+                    (common.status == KLU_SINGULAR && common.halt_if_singular != 0)
                 return Num
             end
 
@@ -1129,8 +1183,8 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
             max_lnz_block = max(max_lnz_block, block_lnz)
             max_unz_block = max(max_unz_block, block_unz)
 
-            @inbounds for k in 0:(nk-1)
-                Num.Pnum[k + k1 + 1] = P[Int(Pblock[k+1]) + k1 + 1]
+            @inbounds for k in 0:(nk - 1)
+                Num.Pnum[k + k1 + 1] = P[Int(Pblock[k + 1]) + k1 + 1]
             end
         end
     end
@@ -1141,7 +1195,7 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
     Num.max_unz_block = Ti(max_unz_block)
 
     @inbounds for k in 1:n
-        Pinv[Int(Num.Pnum[k])+1] = Ti(k-1)
+        Pinv[Int(Num.Pnum[k]) + 1] = Ti(k - 1)
     end
 
     if scale > 0
@@ -1150,7 +1204,7 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
         # allocating fresh.
         Xtmp = Num.Xtmp
         @inbounds for k in 1:n
-            Xtmp[k] = Num.Rs[Int(Num.Pnum[k])+1]
+            Xtmp[k] = Num.Rs[Int(Num.Pnum[k]) + 1]
         end
         @inbounds for k in 1:n
             Num.Rs[k] = Xtmp[k]
@@ -1158,7 +1212,7 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
     end
 
     @inbounds for p in 1:nzoff
-        Num.Offi[p] = Ti(Pinv[Int(Num.Offi[p])+1])
+        Num.Offi[p] = Ti(Pinv[Int(Num.Offi[p]) + 1])
     end
 
     return Num

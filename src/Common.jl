@@ -25,7 +25,7 @@ Carries the same tunable parameters and the per-call statistics that KLU
 mutates. `Ti` is `Int32` or `Int64`, matching the integer width of the
 index arrays.
 """
-mutable struct KLUCommon{Ti<:Integer}
+mutable struct KLUCommon{Ti <: Integer}
     tol::Float64
     memgrow::Float64
     initmem_amd::Float64
@@ -67,7 +67,7 @@ mutable struct KLUCommon{Ti<:Integer}
     fully_preallocated::Bool
 end
 
-function KLUCommon{Ti}() where {Ti<:Integer}
+function KLUCommon{Ti}() where {Ti <: Integer}
     C = KLUCommon{Ti}(
         0.001, 1.2, 1.2, 10.0, 0.0,
         Cint(1), Cint(0), Cint(2),

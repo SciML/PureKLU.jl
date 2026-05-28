@@ -59,15 +59,19 @@ else
 end
 
 # Convert from 1-based to 0-based indices
-function decrement!(A::AbstractArray{T}) where T<:Integer
-    for i in eachindex(A); A[i] -= oneunit(T) end
-    A
+function decrement!(A::AbstractArray{T}) where {T <: Integer}
+    for i in eachindex(A)
+        A[i] -= oneunit(T)
+    end
+    return A
 end
 decrement(A::AbstractArray{<:Integer}) = decrement!(copy(A))
 
-function increment!(A::AbstractArray{T}) where T<:Integer
-    for i in eachindex(A); A[i] += oneunit(T) end
-    A
+function increment!(A::AbstractArray{T}) where {T <: Integer}
+    for i in eachindex(A)
+        A[i] += oneunit(T)
+    end
+    return A
 end
 increment(A::AbstractArray{<:Integer}) = increment!(copy(A))
 
@@ -98,7 +102,7 @@ Matrix factorization type for KLU. Constructed by [`klu`](@ref).
 Mirrors the field names of `KLU.jl`'s `KLUFactorization` so the same
 property accessors (`F.L`, `F.U`, `F.F`, `F.p`, `F.q`, `F.Rs`, …) work.
 """
-mutable struct KLUFactorization{Tv, Ti<:Integer, Tr<:Real} <: AbstractKLUFactorization{Tv, Ti}
+mutable struct KLUFactorization{Tv, Ti <: Integer, Tr <: Real} <: AbstractKLUFactorization{Tv, Ti}
     common::KLUCommon{Ti}
     # `symbolic.n == 0` is the "not yet analyzed" sentinel; `numeric.n ==
     # 0` is "not yet factored".  Concrete fields (no `Union{..., Nothing}`)
@@ -111,8 +115,10 @@ mutable struct KLUFactorization{Tv, Ti<:Integer, Tr<:Real} <: AbstractKLUFactori
     rowval::Vector{Ti}    # 0-based
     nzval::Vector{Tv}
 
-    function KLUFactorization(n::Integer, colptr::Vector{Ti}, rowval::Vector{Ti},
-                              nzval::Vector{Tv}) where {Ti<:Integer, Tv}
+    function KLUFactorization(
+            n::Integer, colptr::Vector{Ti}, rowval::Vector{Ti},
+            nzval::Vector{Tv}
+        ) where {Ti <: Integer, Tv}
         Tr = _real_eltype(Tv)
         common = KLUCommon{Ti}()
         sym = KLUSymbolic{Ti}()
@@ -121,7 +127,7 @@ mutable struct KLUFactorization{Tv, Ti<:Integer, Tr<:Real} <: AbstractKLUFactori
     end
 end
 
-function KLUFactorization(A::SparseMatrixCSC{Tv, Ti}) where {Tv, Ti<:Integer}
+function KLUFactorization(A::SparseMatrixCSC{Tv, Ti}) where {Tv, Ti <: Integer}
     n = size(A, 1)
     n == size(A, 2) || throw(ArgumentError("KLU only accepts square matrices."))
     return KLUFactorization(n, decrement(A.colptr), decrement(A.rowval), copy(A.nzval))
@@ -160,7 +166,7 @@ form accepts user-supplied row/column permutations.
 _is_analyzed(K::KLUFactorization) = getfield(K, :symbolic).n != 0
 _is_factored(K::KLUFactorization) = getfield(K, :numeric).n != 0
 
-function klu_analyze!(K::KLUFactorization{Tv, Ti}; check::Bool=true) where {Tv, Ti}
+function klu_analyze!(K::KLUFactorization{Tv, Ti}; check::Bool = true) where {Tv, Ti}
     _is_analyzed(K) && return K
     Sym = klu_analyze(K.n, K.colptr, K.rowval, K.common)
     if Sym === nothing && check
@@ -171,10 +177,12 @@ function klu_analyze!(K::KLUFactorization{Tv, Ti}; check::Bool=true) where {Tv, 
     return K
 end
 
-function klu_analyze!(K::KLUFactorization{Tv, Ti}, P::Vector{Ti}, Q::Vector{Ti};
-                      check::Bool=true) where {Tv, Ti}
+function klu_analyze!(
+        K::KLUFactorization{Tv, Ti}, P::Vector{Ti}, Q::Vector{Ti};
+        check::Bool = true
+    ) where {Tv, Ti}
     _is_analyzed(K) && return K
-    Sym = klu_analyze(K.n, K.colptr, K.rowval, K.common; given_P=P, given_Q=Q)
+    Sym = klu_analyze(K.n, K.colptr, K.rowval, K.common; given_P = P, given_Q = Q)
     if Sym === nothing && check
         kluerror(K.common)
     elseif Sym !== nothing
@@ -189,8 +197,10 @@ end
 Numeric factorisation. Runs `klu_analyze!` first if it hasn't already
 been done. Mirrors `KLU.jl::klu_factor!`.
 """
-function klu_factor!(K::KLUFactorization{Tv, Ti}; check::Bool=true,
-                     allowsingular::Bool=false) where {Tv, Ti}
+function klu_factor!(
+        K::KLUFactorization{Tv, Ti}; check::Bool = true,
+        allowsingular::Bool = false
+    ) where {Tv, Ti}
     if !_is_analyzed(K) && K.common.status >= KLU_OK
         klu_analyze!(K; check)
     end
@@ -202,8 +212,10 @@ function klu_factor!(K::KLUFactorization{Tv, Ti}; check::Bool=true,
         # nothing beyond the (possible) geometric grow path in the kernel.
         Sym = getfield(K, :symbolic)
         existing = getfield(K, :numeric)
-        Num = klu_factor!(Sym, K.colptr, K.rowval, K.nzval, K.common,
-                          existing; allowsingular)
+        Num = klu_factor!(
+            Sym, K.colptr, K.rowval, K.nzval, K.common,
+            existing; allowsingular
+        )
         K.common.halt_if_singular = Cint(1)
         if K.common.status < KLU_OK && check
             kluerror(K.common)
@@ -220,14 +232,18 @@ function klu_factor!(K::KLUFactorization{Tv, Ti}; check::Bool=true,
     return K
 end
 
-function klu!(K::KLUFactorization{Tv, Ti}, nzval::Vector{Tv};
-              check::Bool=true, allowsingular::Bool=false) where {Tv, Ti}
+function klu!(
+        K::KLUFactorization{Tv, Ti}, nzval::Vector{Tv};
+        check::Bool = true, allowsingular::Bool = false
+    ) where {Tv, Ti}
     length(nzval) != length(K.nzval) && throw(DimensionMismatch())
     _is_factored(K) || throw(ArgumentError("KLUFactorization has not been factored yet. Call `klu_factor!` first."))
     K.nzval = nzval
     K.common.halt_if_singular = (!allowsingular && check) ? Cint(1) : Cint(0)
-    klu_refactor!(getfield(K, :symbolic), getfield(K, :numeric),
-                  K.colptr, K.rowval, K.nzval, K.common; allowsingular)
+    klu_refactor!(
+        getfield(K, :symbolic), getfield(K, :numeric),
+        K.colptr, K.rowval, K.nzval, K.common; allowsingular
+    )
     K.common.halt_if_singular = Cint(1)
     if K.common.status < KLU_OK && check
         kluerror(K.common)
@@ -239,13 +255,17 @@ function klu!(K::KLUFactorization{Tv, Ti}, nzval::Vector{Tv};
 end
 
 # Eltype-mismatched fallback: convert rather than throw.
-function klu!(K::KLUFactorization{Tv, Ti}, nzval::Vector{U};
-              check::Bool=true, allowsingular::Bool=false) where {Tv, Ti, U}
+function klu!(
+        K::KLUFactorization{Tv, Ti}, nzval::Vector{U};
+        check::Bool = true, allowsingular::Bool = false
+    ) where {Tv, Ti, U}
     return klu!(K, convert(Vector{Tv}, nzval); check, allowsingular)
 end
 
-function klu!(K::KLUFactorization{Tv, Ti}, S::SparseMatrixCSC;
-              check::Bool=true, allowsingular::Bool=false) where {Tv, Ti}
+function klu!(
+        K::KLUFactorization{Tv, Ti}, S::SparseMatrixCSC;
+        check::Bool = true, allowsingular::Bool = false
+    ) where {Tv, Ti}
     size(K) == size(S) || throw(ArgumentError("Sizes of K and S must match."))
     increment!(K.colptr); increment!(K.rowval)
     pattern_ok = K.colptr == S.colptr && K.rowval == S.rowval
@@ -270,11 +290,12 @@ Compute the LU factorisation of a sparse matrix using KLU.
 #   * `use_fma=true` (default) and `use_fma=Val(true)` are equivalent.
 #   * `use_fma=false` and `use_fma=Val(false)` opt out of FMA fusion and
 #     give bit-for-bit results identical to SuiteSparse `KLU.jl`.
-function klu(n::Integer, colptr::Vector{Ti}, rowval::Vector{Ti}, nzval::Vector{Tv};
-             check::Bool=true, allowsingular::Bool=false,
-             full_factor::Bool=true, use_fma=true,
-             fully_preallocated::Union{Bool, Nothing}=nothing,
-             ) where {Ti<:KLUITypes, Tv<:KLUGenericTypes}
+function klu(
+        n::Integer, colptr::Vector{Ti}, rowval::Vector{Ti}, nzval::Vector{Tv};
+        check::Bool = true, allowsingular::Bool = false,
+        full_factor::Bool = true, use_fma = true,
+        fully_preallocated::Union{Bool, Nothing} = nothing,
+    ) where {Ti <: KLUITypes, Tv <: KLUGenericTypes}
     K = KLUFactorization(n, colptr, rowval, nzval)
     K.common.use_fma = _as_val(use_fma)
     if fully_preallocated isa Bool
@@ -286,14 +307,17 @@ function klu(n::Integer, colptr::Vector{Ti}, rowval::Vector{Ti}, nzval::Vector{T
     return full_factor ? klu_factor!(K; check, allowsingular) : K
 end
 
-function klu(A::SparseMatrixCSC{Tv, Ti}; check::Bool=true,
-             allowsingular::Bool=false, full_factor::Bool=true,
-             use_fma=true, fully_preallocated::Union{Bool, Nothing}=nothing,
-             ) where {Tv<:KLUGenericTypes, Ti<:KLUITypes}
+function klu(
+        A::SparseMatrixCSC{Tv, Ti}; check::Bool = true,
+        allowsingular::Bool = false, full_factor::Bool = true,
+        use_fma = true, fully_preallocated::Union{Bool, Nothing} = nothing,
+    ) where {Tv <: KLUGenericTypes, Ti <: KLUITypes}
     n = size(A, 1)
     n == size(A, 2) || throw(DimensionMismatch())
-    return klu(n, decrement(A.colptr), decrement(A.rowval), A.nzval;
-               check, allowsingular, full_factor, use_fma, fully_preallocated)
+    return klu(
+        n, decrement(A.colptr), decrement(A.rowval), A.nzval;
+        check, allowsingular, full_factor, use_fma, fully_preallocated
+    )
 end
 
 # --- solve API -------------------------------------------------------------
@@ -303,8 +327,10 @@ end
 
 In-place solve. `B` is overwritten with the solution.
 """
-function solve!(K::AbstractKLUFactorization{Tv, Ti}, B::StridedVecOrMat{Tv};
-                check::Bool=true) where {Tv, Ti}
+function solve!(
+        K::AbstractKLUFactorization{Tv, Ti}, B::StridedVecOrMat{Tv};
+        check::Bool = true
+    ) where {Tv, Ti}
     stride(B, 1) == 1 || throw(ArgumentError("B must have unit strides"))
     _is_factored(K) || klu_factor!(K)
     size(B, 1) == size(K, 1) || throw(DimensionMismatch())
@@ -315,66 +341,77 @@ function solve!(K::AbstractKLUFactorization{Tv, Ti}, B::StridedVecOrMat{Tv};
     return B
 end
 
-function solve!(K::AdjointFact{Tv, KF}, B::StridedVecOrMat{Tv};
-                check::Bool=true) where {Tv, Ti, KF<:AbstractKLUFactorization{Tv, Ti}}
+function solve!(
+        K::AdjointFact{Tv, KF}, B::StridedVecOrMat{Tv};
+        check::Bool = true
+    ) where {Tv, Ti, KF <: AbstractKLUFactorization{Tv, Ti}}
     parent_K = parent(K)
     stride(B, 1) == 1 || throw(ArgumentError("B must have unit strides"))
     _is_factored(parent_K) || klu_factor!(parent_K)
     size(B, 1) == size(parent_K, 1) || throw(DimensionMismatch())
-    klu_tsolve!(getfield(parent_K, :symbolic), getfield(parent_K, :numeric),
-                B, parent_K.common; conj_solve=(Tv <: Complex))
+    klu_tsolve!(
+        getfield(parent_K, :symbolic), getfield(parent_K, :numeric),
+        B, parent_K.common; conj_solve = (Tv <: Complex)
+    )
     if parent_K.common.status != KLU_OK && check
         kluerror(parent_K.common)
     end
     return B
 end
 
-function solve!(K::TransposeFact{Tv, KF}, B::StridedVecOrMat{Tv};
-                check::Bool=true) where {Tv, Ti, KF<:AbstractKLUFactorization{Tv, Ti}}
+function solve!(
+        K::TransposeFact{Tv, KF}, B::StridedVecOrMat{Tv};
+        check::Bool = true
+    ) where {Tv, Ti, KF <: AbstractKLUFactorization{Tv, Ti}}
     parent_K = parent(K)
     stride(B, 1) == 1 || throw(ArgumentError("B must have unit strides"))
     _is_factored(parent_K) || klu_factor!(parent_K)
     size(B, 1) == size(parent_K, 1) || throw(DimensionMismatch())
-    klu_tsolve!(getfield(parent_K, :symbolic), getfield(parent_K, :numeric),
-                B, parent_K.common; conj_solve=false)
+    klu_tsolve!(
+        getfield(parent_K, :symbolic), getfield(parent_K, :numeric),
+        B, parent_K.common; conj_solve = false
+    )
     if parent_K.common.status != KLU_OK && check
         kluerror(parent_K.common)
     end
     return B
 end
 
-solve(K, B; check::Bool=true) = solve!(K, copy(B); check)
+solve(K, B; check::Bool = true) = solve!(K, copy(B); check)
 
 LinearAlgebra.ldiv!(K::AbstractKLUFactorization{Tv}, B::StridedVecOrMat{Tv}) where {Tv} =
     solve!(K, B)
-LinearAlgebra.ldiv!(K::Union{AdjointFact{Tv, KF}, TransposeFact{Tv, KF}}, B::StridedVecOrMat{Tv}) where {Tv, Ti, KF<:AbstractKLUFactorization{Tv, Ti}} =
+LinearAlgebra.ldiv!(K::Union{AdjointFact{Tv, KF}, TransposeFact{Tv, KF}}, B::StridedVecOrMat{Tv}) where {Tv, Ti, KF <: AbstractKLUFactorization{Tv, Ti}} =
     solve!(K, B)
-function LinearAlgebra.ldiv!(K::AbstractKLUFactorization{<:AbstractFloat},
-                             B::StridedVecOrMat{<:Complex})
+function LinearAlgebra.ldiv!(
+        K::AbstractKLUFactorization{<:AbstractFloat},
+        B::StridedVecOrMat{<:Complex}
+    )
     imagX = solve(K, imag(B))
     realX = solve(K, real(B))
-    map!(complex, B, realX, imagX)
+    return map!(complex, B, realX, imagX)
 end
-function LinearAlgebra.ldiv!(K::Union{AdjointFact{Tv, KF},TransposeFact{Tv, KF}},
-                             B::StridedVecOrMat{<:Complex}
-                             ) where {Tv<:AbstractFloat, Ti, KF<:AbstractKLUFactorization{Tv, Ti}}
+function LinearAlgebra.ldiv!(
+        K::Union{AdjointFact{Tv, KF}, TransposeFact{Tv, KF}},
+        B::StridedVecOrMat{<:Complex}
+    ) where {Tv <: AbstractFloat, Ti, KF <: AbstractKLUFactorization{Tv, Ti}}
     imagX = solve(K, imag(B))
     realX = solve(K, real(B))
-    map!(complex, B, realX, imagX)
+    return map!(complex, B, realX, imagX)
 end
 
 # Generic Base.\ falls through to ldiv! via LinearAlgebra.Factorization.
 
-function LinearAlgebra.issuccess(K::AbstractKLUFactorization; allowsingular::Bool=false)
+function LinearAlgebra.issuccess(K::AbstractKLUFactorization; allowsingular::Bool = false)
     return (allowsingular ? K.common.status >= KLU_OK : K.common.status == KLU_OK) &&
-           _is_factored(K)
+        _is_factored(K)
 end
 
 # --- property access (mirrors KLU.jl) --------------------------------------
 
-function Base.propertynames(::AbstractKLUFactorization, private::Bool=false)
-    publicnames = (:lnz, :unz, :nzoff, :L, :U, :F, :q, :p, :Rs, :symbolic, :numeric,)
-    privatenames = (:nblocks, :maxblock,)
+function Base.propertynames(::AbstractKLUFactorization, private::Bool = false)
+    publicnames = (:lnz, :unz, :nzoff, :L, :U, :F, :q, :p, :Rs, :symbolic, :numeric)
+    privatenames = (:nblocks, :maxblock)
     if private
         return (publicnames..., privatenames...)
     else
@@ -418,7 +455,7 @@ function getproperty(K::AbstractKLUFactorization{Tv, Ti}, s::Symbol) where {Tv, 
         out = copy(Sym.Q); out .+= one(Ti); return out
     elseif s === :R
         nb = Int(Sym.nblocks)
-        out = Sym.R[1:nb+1]; out .+= one(Ti); return out
+        out = Sym.R[1:(nb + 1)]; out .+= one(Ti); return out
     elseif s === :Rs
         Tr = _real_eltype(Tv)
         return isempty(Num.Rs) ? fill(one(Tr), K.n) : copy(Num.Rs)
@@ -433,7 +470,7 @@ function getproperty(K::AbstractKLUFactorization{Tv, Ti}, s::Symbol) where {Tv, 
 end
 
 function setproperty!(K::AbstractKLUFactorization, s::Symbol, x)
-    setfield!(K, s, x)
+    return setfield!(K, s, x)
 end
 
 function _extract_L(K::AbstractKLUFactorization{Tv, Ti}) where {Tv, Ti}
@@ -449,34 +486,34 @@ function _extract_L(K::AbstractKLUFactorization{Tv, Ti}) where {Tv, Ti}
     Lx = Vector{Tv}(undef, nz)
     p = 0
     for block in 1:nblocks
-        k1 = Int(Sym.R[block]); k2 = Int(Sym.R[block+1])
+        k1 = Int(Sym.R[block]); k2 = Int(Sym.R[block + 1])
         nk = k2 - k1
         if nk == 1
-            Lp[k1+1] = Ti(p)
-            Li[p+1] = Ti(k1)
-            Lx[p+1] = one(Tv)
+            Lp[k1 + 1] = Ti(p)
+            Li[p + 1] = Ti(k1)
+            Lx[p + 1] = one(Tv)
             p += 1
         else
             bk = Num.LUbx[block]
-            for kk in 0:(nk-1)
-                Lp[k1+kk+1] = Ti(p)
+            for kk in 0:(nk - 1)
+                Lp[k1 + kk + 1] = Ti(p)
                 col_start = p
-                Li[p+1] = Ti(k1 + kk)  # unit diagonal first
-                Lx[p+1] = one(Tv)
+                Li[p + 1] = Ti(k1 + kk)  # unit diagonal first
+                Lx[p + 1] = one(Tv)
                 p += 1
-                lip = Int(Num.Lip[k1+kk+1])
-                llen = Int(Num.Llen[k1+kk+1])
-                for q in 0:(llen-1)
-                    Li[p+1] = Ti(k1 + Int(bk.Li[lip+q+1]))
-                    Lx[p+1] = bk.Lx[lip+q+1]
+                lip = Int(Num.Lip[k1 + kk + 1])
+                llen = Int(Num.Llen[k1 + kk + 1])
+                for q in 0:(llen - 1)
+                    Li[p + 1] = Ti(k1 + Int(bk.Li[lip + q + 1]))
+                    Lx[p + 1] = bk.Lx[lip + q + 1]
                     p += 1
                 end
                 # sort by row within the column
-                _sort_col!(Li, Lx, col_start+1, p)
+                _sort_col!(Li, Lx, col_start + 1, p)
             end
         end
     end
-    Lp[n+1] = Ti(p)
+    Lp[n + 1] = Ti(p)
     return SparseMatrixCSC(n, n, increment!(Lp), increment!(Li), Lx)
 end
 
@@ -490,34 +527,34 @@ function _extract_U(K::AbstractKLUFactorization{Tv, Ti}) where {Tv, Ti}
     Ux = Vector{Tv}(undef, nz)
     p = 0
     for block in 1:nblocks
-        k1 = Int(Sym.R[block]); k2 = Int(Sym.R[block+1])
+        k1 = Int(Sym.R[block]); k2 = Int(Sym.R[block + 1])
         nk = k2 - k1
         if nk == 1
-            Up[k1+1] = Ti(p)
-            Ui[p+1] = Ti(k1)
-            Ux[p+1] = Num.Udiag[k1+1]
+            Up[k1 + 1] = Ti(p)
+            Ui[p + 1] = Ti(k1)
+            Ux[p + 1] = Num.Udiag[k1 + 1]
             p += 1
         else
             bk = Num.LUbx[block]
-            for kk in 0:(nk-1)
-                Up[k1+kk+1] = Ti(p)
+            for kk in 0:(nk - 1)
+                Up[k1 + kk + 1] = Ti(p)
                 col_start = p
-                uip = Int(Num.Uip[k1+kk+1])
-                ulen = Int(Num.Ulen[k1+kk+1])
-                for q in 0:(ulen-1)
-                    Ui[p+1] = Ti(k1 + Int(bk.Ui[uip+q+1]))
-                    Ux[p+1] = bk.Ux[uip+q+1]
+                uip = Int(Num.Uip[k1 + kk + 1])
+                ulen = Int(Num.Ulen[k1 + kk + 1])
+                for q in 0:(ulen - 1)
+                    Ui[p + 1] = Ti(k1 + Int(bk.Ui[uip + q + 1]))
+                    Ux[p + 1] = bk.Ux[uip + q + 1]
                     p += 1
                 end
-                Ui[p+1] = Ti(k1 + kk)
-                Ux[p+1] = Num.Udiag[k1+kk+1]
+                Ui[p + 1] = Ti(k1 + kk)
+                Ux[p + 1] = Num.Udiag[k1 + kk + 1]
                 p += 1
                 # sort by row within the column
-                _sort_col!(Ui, Ux, col_start+1, p)
+                _sort_col!(Ui, Ux, col_start + 1, p)
             end
         end
     end
-    Up[n+1] = Ti(p)
+    Up[n + 1] = Ti(p)
     return SparseMatrixCSC(n, n, increment!(Up), increment!(Ui), Ux)
 end
 
@@ -538,7 +575,7 @@ function _extract_F(K::AbstractKLUFactorization{Tv, Ti}) where {Tv, Ti}
     n = Int(Sym.n)
     nzoff = Int(Num.nzoff)
     if nzoff == 0
-        Fp = zeros(Ti, n+1)
+        Fp = zeros(Ti, n + 1)
         Fi = Ti[]
         Fx = Tv[]
         return SparseMatrixCSC(n, n, increment!(Fp), increment!(Fi), Fx)
@@ -549,7 +586,7 @@ function _extract_F(K::AbstractKLUFactorization{Tv, Ti}) where {Tv, Ti}
     # KLU's F is not sorted, sort columns
     for col in 1:n
         first = Int(Fp[col]) + 1
-        last = Int(Fp[col+1])
+        last = Int(Fp[col + 1])
         first > last && continue
         Fiview = view(Fi, first:last)
         Fxview = view(Fx, first:last)
@@ -562,7 +599,7 @@ end
 
 function show(io::IO, mime::MIME{Symbol("text/plain")}, K::AbstractKLUFactorization)
     summary(io, K); println(io)
-    if _is_factored(K)
+    return if _is_factored(K)
         println(io, "L factor:")
         show(io, mime, K.L)
         println(io, "\nU factor:")
@@ -595,8 +632,8 @@ end
                 solve!(K', copy(b))
                 solve!(transpose(K), copy(b))
                 klu!(K, A.nzval)
-                klu(A; fully_preallocated=true)
-                klu(A; use_fma=false)
+                klu(A; fully_preallocated = true)
+                klu(A; use_fma = false)
             end
         end
     end

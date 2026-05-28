@@ -10,10 +10,10 @@ using LinearAlgebra
 using Random
 using Test
 
-function _small_test_matrix(seed::Int=1)
+function _small_test_matrix(seed::Int = 1)
     rng = MersenneTwister(seed)
     n = 200
-    A = sprand(rng, n, n, 0.05) + n*I
+    A = sprand(rng, n, n, 0.05) + n * I
     return SparseMatrixCSC(A)
 end
 
@@ -60,39 +60,43 @@ end
     function _laplacian_2d(k::Int)
         nn = k * k
         diag_main = 4.0 * ones(nn)
-        diag_off1 = -1.0 * ones(nn-1)
-        for i in 1:nn-1
-            if i % k == 0; diag_off1[i] = 0.0; end
+        diag_off1 = -1.0 * ones(nn - 1)
+        for i in 1:(nn - 1)
+            if i % k == 0
+                diag_off1[i] = 0.0
+            end
         end
-        diag_offk = -1.0 * ones(nn-k)
-        A = spdiagm(-k => diag_offk, -1 => diag_off1, 0 => diag_main,
-                    1 => diag_off1, k => diag_offk)
+        diag_offk = -1.0 * ones(nn - k)
+        A = spdiagm(
+            -k => diag_offk, -1 => diag_off1, 0 => diag_main,
+            1 => diag_off1, k => diag_offk
+        )
         dropzeros!(A); return A
     end
     function _band(n::Int, bw::Int)
         diags = Dict{Int, Vector{Float64}}()
         diags[0] = Float64(n) .* ones(n)
         for d in 1:bw
-            diags[ d] = -ones(n-d); diags[-d] = -ones(n-d)
+            diags[d] = -ones(n - d); diags[-d] = -ones(n - d)
         end
         A = spdiagm((k => v for (k, v) in diags)...)
         dropzeros!(A); return A
     end
     function _arrow(n::Int)
-        Ir = vcat(fill(1, n-1), 2:n, 1:n)
-        Jr = vcat(2:n, fill(1, n-1), 1:n)
-        Vr = vcat(ones(n-1), ones(n-1), Float64(n) .* ones(n))
+        Ir = vcat(fill(1, n - 1), 2:n, 1:n)
+        Jr = vcat(2:n, fill(1, n - 1), 1:n)
+        Vr = vcat(ones(n - 1), ones(n - 1), Float64(n) .* ones(n))
         return sparse(Ir, Jr, Vr, n, n)
     end
 
     matrices = Any[
         ("laplacian_20x20", _laplacian_2d(20)),
-        ("band_n500_bw5",   _band(500, 5)),
-        ("band_n2000_bw5",  _band(2000, 5)),
-        ("arrow_n500",      _arrow(500)),
+        ("band_n500_bw5", _band(500, 5)),
+        ("band_n2000_bw5", _band(2000, 5)),
+        ("arrow_n500", _arrow(500)),
     ]
     for (name, A) in matrices
-        K = klu(A; full_factor=false)
+        K = klu(A; full_factor = false)
         # Warm both paths: factor populates the per-block buffers,
         # refactor specialises the refactor call.
         klu_factor!(K)

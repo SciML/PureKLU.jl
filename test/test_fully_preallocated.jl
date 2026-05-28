@@ -12,15 +12,15 @@ const _TIGHT_INITMEM = 0.1
 @testset "fully_preallocated: bit-identical results" begin
     rng = MersenneTwister(1234)
     matrices = Any[
-        ("sprand_50_0.1",  sprand(rng, 50, 50, 0.1) + 50*I),
-        ("sprand_100_0.1", sprand(rng, 100, 100, 0.1) + 100*I),
-        ("sprand_200_0.05", sprand(rng, 200, 200, 0.05) + 200*I),
+        ("sprand_50_0.1", sprand(rng, 50, 50, 0.1) + 50 * I),
+        ("sprand_100_0.1", sprand(rng, 100, 100, 0.1) + 100 * I),
+        ("sprand_200_0.05", sprand(rng, 200, 200, 0.05) + 200 * I),
     ]
     for (name, A) in matrices
         n = size(A, 1)
         b = randn(rng, n)
         K_def = klu(A)
-        K_pre = klu(A; fully_preallocated=true)
+        K_pre = klu(A; fully_preallocated = true)
         x_def = K_def \ copy(b)
         x_pre = K_pre \ copy(b)
         @test x_def == x_pre
@@ -32,7 +32,7 @@ end
 
 @testset "fully_preallocated: zero allocations even when default path grows" begin
     rng = MersenneTwister(7)
-    A = sprand(rng, 100, 100, 0.2) + 100*I
+    A = sprand(rng, 100, 100, 0.2) + 100 * I
 
     K_def = KLUFactorization(A)
     K_def.common.initmem_amd = _TIGHT_INITMEM
@@ -43,12 +43,12 @@ end
     Sym = K_def.symbolic; Num = K_def.numeric
     did_grow = false
     for b in 1:Int(Sym.nblocks)
-        k1 = Int(Sym.R[b]); k2 = Int(Sym.R[b+1]); nk = k2 - k1
+        k1 = Int(Sym.R[b]); k2 = Int(Sym.R[b + 1]); nk = k2 - k1
         nk <= 1 && continue
         est = Sym.Lnz[b]
         init_cap = est >= 0 ?
-            ceil(Int, _TIGHT_INITMEM*est) + nk :
-            ceil(Int, Float64(nk)^2/4 * _TIGHT_INITMEM) + nk
+            ceil(Int, _TIGHT_INITMEM * est) + nk :
+            ceil(Int, Float64(nk)^2 / 4 * _TIGHT_INITMEM) + nk
         bk = Num.LUbx[b]
         if length(bk.Li) > init_cap || length(bk.Ui) > init_cap
             did_grow = true
@@ -78,11 +78,11 @@ end
 @testset "fully_preallocated: capacity bound is sufficient on tough matrices" begin
     rng = MersenneTwister(31415)
     for (n, d) in [(30, 0.5), (50, 0.3), (100, 0.2), (200, 0.1)]
-        A = sprand(rng, n, n, d) + n*I
-        K = klu(A; fully_preallocated=true)
+        A = sprand(rng, n, n, d) + n * I
+        K = klu(A; fully_preallocated = true)
         Sym = K.symbolic; Num = K.numeric
         for b in 1:Int(Sym.nblocks)
-            k1 = Int(Sym.R[b]); k2 = Int(Sym.R[b+1]); nk = k2 - k1
+            k1 = Int(Sym.R[b]); k2 = Int(Sym.R[b + 1]); nk = k2 - k1
             nk <= 1 && continue
             bk = Num.LUbx[b]
             bound = (nk * (nk + 1)) >> 1
@@ -95,10 +95,10 @@ end
 end
 
 @testset "fully_preallocated: kwarg accepts true, false, and nothing (auto)" begin
-    A = sprand(MersenneTwister(2), 30, 30, 0.1) + 30*I
-    K1 = klu(A; fully_preallocated=true)
-    K2 = klu(A; fully_preallocated=false)
-    K3 = klu(A; fully_preallocated=nothing)
+    A = sprand(MersenneTwister(2), 30, 30, 0.1) + 30 * I
+    K1 = klu(A; fully_preallocated = true)
+    K2 = klu(A; fully_preallocated = false)
+    K3 = klu(A; fully_preallocated = nothing)
     K4 = klu(A)
     b = randn(MersenneTwister(3), 30)
     @test K1 \ copy(b) == K2 \ copy(b)
@@ -107,7 +107,7 @@ end
 end
 
 @testset "fully_preallocated: auto heuristic flips on small-maxblock" begin
-    A_small = sprand(MersenneTwister(11), 50, 50, 0.05) + 50*I
+    A_small = sprand(MersenneTwister(11), 50, 50, 0.05) + 50 * I
     K_small = klu(A_small)
     @test Int(K_small.symbolic.maxblock) <= PureKLU.AUTO_PREALLOC_MAXBLOCK
 
