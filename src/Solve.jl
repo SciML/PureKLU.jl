@@ -11,14 +11,14 @@ Solve `A * X = B` in place, where `A = P' * R * L * U * Q'` (i.e. the
 matrix originally analysed and factored). `B` is a vector or matrix.
 Mirrors `klu_solve.c`.
 """
-function klu_solve!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti},
-                    B::AbstractVecOrMat{Tv}, common::KLUCommon{Ti}) where {Tv, Ti}
+function klu_solve!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
+                    B::AbstractVecOrMat{Tv}, common::KLUCommon{Ti}) where {Tv, Ti, Tr}
     return _klu_solve_impl!(Sym, Num, B, common, common.use_fma)
 end
 
-function _klu_solve_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti},
+function _klu_solve_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                           B::AbstractVecOrMat{Tv}, common::KLUCommon{Ti},
-                          fma_val::Val) where {Tv, Ti}
+                          fma_val::Val) where {Tv, Ti, Tr}
     common.status = Cint(KLU_OK)
     n = Int(Sym.n)
     size(B, 1) == n || throw(DimensionMismatch())
@@ -131,17 +131,17 @@ end
 Solve `A' * X = B` (or `A^H X = B` if `conj_solve=true` and `Tv` is
 complex) in place. Mirrors `klu_tsolve.c`.
 """
-function klu_tsolve!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti},
+function klu_tsolve!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                      B::AbstractVecOrMat{Tv}, common::KLUCommon{Ti};
-                     conj_solve::Bool=false) where {Tv, Ti}
+                     conj_solve::Bool=false) where {Tv, Ti, Tr}
     return _klu_tsolve_impl!(Sym, Num, B, common, common.use_fma;
                              conj_solve)
 end
 
-function _klu_tsolve_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti},
+function _klu_tsolve_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                            B::AbstractVecOrMat{Tv}, common::KLUCommon{Ti},
                            fma_val::Val;
-                           conj_solve::Bool=false) where {Tv, Ti}
+                           conj_solve::Bool=false) where {Tv, Ti, Tr}
     common.status = Cint(KLU_OK)
     n = Int(Sym.n)
     size(B, 1) == n || throw(DimensionMismatch())
@@ -278,7 +278,7 @@ calling this routine ensures `K.LUbx[block]` matches the post-sort state
 that KLU.jl leaves behind, which makes subsequent refactors bit-for-bit
 equivalent.
 """
-function klu_sort!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti}) where {Tv, Ti}
+function klu_sort!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr}) where {Tv, Ti, Tr}
     nblocks = Int(Sym.nblocks)
     for block in 1:nblocks
         k1 = Int(Sym.R[block]); k2 = Int(Sym.R[block+1])
@@ -318,18 +318,18 @@ Re-factor a matrix with the same nonzero pattern as the one used to
 build `Num`. No pivoting is performed; the sparsity pattern and pivot
 order of L and U are reused. Mirrors `klu_refactor.c`.
 """
-function klu_refactor!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti},
+function klu_refactor!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                        Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
                        common::KLUCommon{Ti};
-                       allowsingular::Bool=false) where {Tv, Ti}
+                       allowsingular::Bool=false) where {Tv, Ti, Tr}
     return _klu_refactor_impl!(Sym, Num, Ap, Ai, Ax, common, common.use_fma;
                                allowsingular)
 end
 
-function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti},
+function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti, Tr},
                              Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
                              common::KLUCommon{Ti}, fma_val::Val;
-                             allowsingular::Bool=false) where {Tv, Ti}
+                             allowsingular::Bool=false) where {Tv, Ti, Tr}
     common.status = Cint(KLU_OK)
     common.numerical_rank = Ti(EMPTY)
     common.singular_col = Ti(EMPTY)
@@ -349,10 +349,13 @@ function _klu_refactor_impl!(Sym::KLUSymbolic{Ti}, Num::KLUNumeric{Tv, Ti},
     scale = Int(common.scale)
     if scale > 0
         if isempty(Num.Rs)
-            Num.Rs = zeros(Float64, n)
+            Num.Rs = zeros(Tr, n)
+        end
+        if isempty(Num.Xtmp)
+            Num.Xtmp = Vector{Tr}(undef, n)
         end
     else
-        Num.Rs = Float64[]
+        Num.Rs = Tr[]
     end
     Rs = Num.Rs
 

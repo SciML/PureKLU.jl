@@ -114,7 +114,9 @@ names exposed by `KLU.jl` (`Pnum`, `Pinv`, `Lip`, `Uip`, `Llen`, `Ulen`,
 `LUbx`, `Udiag`, `Rs`, `Offp`, `Offi`, `Offx`) so the same accessor logic
 applies.
 """
-mutable struct KLUNumeric{Tv, Ti<:Integer}
+_real_eltype(::Type{Tv}) where {Tv} = typeof(real(zero(Tv)))
+
+mutable struct KLUNumeric{Tv, Ti<:Integer, Tr<:Real}
     n::Ti
     nblocks::Ti
     lnz::Ti
@@ -129,28 +131,28 @@ mutable struct KLUNumeric{Tv, Ti<:Integer}
     Ulen::Vector{Ti}
     LUbx::Vector{KLUNumericBlock{Tv, Ti}}
     Udiag::Vector{Tv}
-    Rs::Vector{Float64}
+    Rs::Vector{Tr}
     Offp::Vector{Ti}
     Offi::Vector{Ti}
     Offx::Vector{Tv}
     nzoff::Ti
-    # Preallocated length-`n` solve workspace; lets `klu_solve!`,
-    # `klu_tsolve!` and `klu_refactor!` avoid per-call `Vector{Tv}` heap
-    # allocations.  Owned by the numeric struct, so its lifetime matches
-    # the factorisation.
     Xwork::Vector{Tv}
-    # Length-`n` Float64 scratch used by the row-scale permutation pass
-    # at the tail of factor / refactor (`Rs[k] = Rs[Pnum[k]]` shuffle).
-    # Allocated only when `common.scale > 0`; empty otherwise.
-    Xtmp::Vector{Float64}
+    # Allocated only when `common.scale > 0`; empty otherwise -- the
+    # `Rs[k] = Rs[Pnum[k]]` shuffle at the tail of factor/refactor is
+    # skipped entirely in the unscaled case.
+    Xtmp::Vector{Tr}
 end
+
+KLUNumeric{Tv, Ti}(args...) where {Tv, Ti} =
+    KLUNumeric{Tv, Ti, _real_eltype(Tv)}(args...)
 
 function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti}) where {Tv, Ti}
     n = Int(Sym.n)
     nblocks = Int(Sym.nblocks)
     nzoff = Int(Sym.nzoff)
     scale = Int(common.scale)
-    Num = KLUNumeric{Tv, Ti}(
+    Tr = _real_eltype(Tv)
+    Num = KLUNumeric{Tv, Ti, Tr}(
         Sym.n, Sym.nblocks, Ti(0), Ti(0), Ti(1), Ti(1),
         Vector{Ti}(undef, n),
         Vector{Ti}(undef, n),
@@ -160,13 +162,13 @@ function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti})
         Vector{Ti}(undef, n),
         KLUNumericBlock{Tv, Ti}[KLUNumericBlock{Tv, Ti}() for _ in 1:nblocks],
         Vector{Tv}(undef, n),
-        scale > 0 ? zeros(Float64, n) : Float64[],
+        scale > 0 ? zeros(Tr, n) : Tr[],
         zeros(Ti, n + 1),
         Vector{Ti}(undef, max(nzoff, 0)),
         Vector{Tv}(undef, max(nzoff, 0)),
         Sym.nzoff,
         Vector{Tv}(undef, n),
-        scale > 0 ? Vector{Float64}(undef, n) : Float64[],
+        scale > 0 ? Vector{Tr}(undef, n) : Tr[],
     )
     return Num
 end
@@ -182,7 +184,7 @@ divides by its ∞-norm. Mirrors `klu_scale.c`.
 """
 function klu_scale!(scale::Integer, n::Integer,
                     Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
-                    Rs::Union{Vector{Float64},Nothing},
+                    Rs::Union{Vector{<:Real},Nothing},
                     W::Union{Vector{Ti},Nothing},
                     common::KLUCommon{Ti}) where {Tv, Ti}
     fma_val = common.use_fma
@@ -203,8 +205,10 @@ function klu_scale!(scale::Integer, n::Integer,
         end
     end
     if scale > 0
+        Tr = eltype(Rs)
+        z = zero(Tr)
         @inbounds for row in 1:n
-            Rs[row] = 0.0
+            Rs[row] = z
         end
     end
     check_duplicates = W !== nothing
@@ -239,9 +243,11 @@ function klu_scale!(scale::Integer, n::Integer,
         end
     end
     if scale > 0
+        Tr = eltype(Rs)
+        zr = zero(Tr); one_r = one(Tr)
         @inbounds for row in 1:n
-            if Rs[row] == 0.0
-                Rs[row] = 1.0
+            if Rs[row] == zr
+                Rs[row] = one_r
             end
         end
     end
@@ -371,7 +377,7 @@ end
 function _kernel_construct_column!(k::Int, Ap::Vector{Ti}, Ai::Vector{Ti},
                                    Ax::Vector{Tv}, Q::Vector{Ti}, X::Vector{Tv},
                                    k1::Int, PSinv::Vector{Ti},
-                                   Rs::Vector{Float64}, scale::Int,
+                                   Rs::Vector{<:Real}, scale::Int,
                                    Offp::Vector{Ti}, Offi::Vector{Ti},
                                    Offx::Vector{Tv}) where {Tv, Ti}
     kglobal = k + k1
@@ -457,23 +463,24 @@ function _kernel_lpivot!(diagrow::Int, k::Int, n::Int,
                          Lip::AbstractVector{Ti}, Llen::AbstractVector{Ti},
                          Pinv::Vector{Ti}, firstrow_ref::Ref{Int},
                          common::KLUCommon{Ti}, fma_val::Val) where {Tv, Ti}
+    Tr = _real_eltype(Tv)
     if Llen[k+1] == 0
         if common.halt_if_singular != 0
-            return false, -1, zero(Tv), 0.0
+            return false, -1, zero(Tv), zero(Tr)
         end
         for firstrow in firstrow_ref[]:(n-1)
             if Pinv[firstrow+1] < 0
                 firstrow_ref[] = firstrow
                 # Clear X at any non-pivotal row (matches C's behavior to leave X zero)
-                return false, firstrow, zero(Tv), 0.0
+                return false, firstrow, zero(Tv), zero(Tr)
             end
         end
-        return false, -1, zero(Tv), 0.0
+        return false, -1, zero(Tv), zero(Tr)
     end
 
     pdiag = -1
     ppivrow = -1
-    abs_pivot = -1.0
+    abs_pivot = -one(Tr)
     @inbounds lip = Int(Lip[k+1])
     @inbounds len_full = Int(Llen[k+1])
     @inbounds last_row_index = Int(block_Li[lip + len_full])
@@ -605,7 +612,7 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
                     Pblock::Vector{Ti},
                     wk::KernelWorkspace{Tv, Ti},
                     k1::Int, PSinv::Vector{Ti},
-                    Rs::Vector{Float64}, scale::Int,
+                    Rs::Vector{<:Real}, scale::Int,
                     Offp::Vector{Ti}, Offi::Vector{Ti}, Offx::Vector{Tv},
                     common::KLUCommon{Ti}, fma_val::Val) where {Tv, Ti}
     n = nk
