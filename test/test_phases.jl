@@ -48,14 +48,14 @@ function klu_internal_btf(A::SparseMatrixCSC)
     # The Symbolic struct holds Q, P, R as Ptr{Int32} or Ptr{Int64}.
     Tptr = eltype(Sym.Q)  # Int32 or Int64 (Ptr base)
     Ti = Tptr === Ptr{Int64} ? Int64 : Int32
-    Qarr = unsafe_wrap(Array, Sym.Q, n; own=false)
-    Parr = unsafe_wrap(Array, Sym.P, n; own=false)
-    Rarr = unsafe_wrap(Array, Sym.R, Int(Sym.nblocks)+1; own=false)
+    Qarr = unsafe_wrap(Array, Sym.Q, n; own = false)
+    Parr = unsafe_wrap(Array, Sym.P, n; own = false)
+    Rarr = unsafe_wrap(Array, Sym.R, Int(Sym.nblocks) + 1; own = false)
     Q_btf .= Int.(Qarr)
     P_btf .= Int.(Parr)
     R .= Int.(Rarr)
     return P_btf, Q_btf, R, Int(Sym.structural_rank), Int(Sym.nblocks),
-           Int(Sym.maxblock), Int(Sym.nz), Int(Sym.nzoff)
+        Int(Sym.maxblock), Int(Sym.nz), Int(Sym.nzoff)
 end
 
 """
@@ -64,11 +64,11 @@ end
 Same fields, read from PureKLU's symbolic struct.
 """
 function pureklu_internal_btf(A::SparseMatrixCSC)
-    F = PureKLU.klu(A; use_fma=USE_FMA)
+    F = PureKLU.klu(A; use_fma = USE_FMA)
     Sym = getfield(F, :symbolic)
-    return Int.(Sym.P), Int.(Sym.Q), Int.(Sym.R[1:Int(Sym.nblocks)+1]),
-           Int(Sym.structural_rank), Int(Sym.nblocks),
-           Int(Sym.maxblock), Int(Sym.nz), Int(Sym.nzoff)
+    return Int.(Sym.P), Int.(Sym.Q), Int.(Sym.R[1:(Int(Sym.nblocks) + 1)]),
+        Int(Sym.structural_rank), Int(Sym.nblocks),
+        Int(Sym.maxblock), Int(Sym.nz), Int(Sym.nzoff)
 end
 
 # ---------- BTF.order! direct comparison -----------------------------------
@@ -78,19 +78,19 @@ end
         sparse([2.0 3.0 0; 1.0 0 0; 0 0 1.0]),
         sparse([1.0 0 0 0; 0 2.0 0 0; 1.0 1.0 3.0 0; 0 0 1.0 4.0]),
         let
-            Ap = [0,4,1,1,2,2,0,1,2,3,4,4] .+ 1
-            Ai = [0,4,0,2,1,2,1,4,3,2,1,2] .+ 1
-            Ax = [2.,1.,3.,4.,-1.,-3.,3.,6.,2.,1.,4.,2.]
+            Ap = [0, 4, 1, 1, 2, 2, 0, 1, 2, 3, 4, 4] .+ 1
+            Ai = [0, 4, 0, 2, 1, 2, 1, 4, 3, 2, 1, 2] .+ 1
+            Ax = [2.0, 1.0, 3.0, 4.0, -1.0, -3.0, 3.0, 6.0, 2.0, 1.0, 4.0, 2.0]
             sparse(Ap, Ai, Ax)
         end,
     ]
     Random.seed!(1)
     for n in (5, 10, 20, 50)
-        push!(test_matrices, sprand(n, n, 0.1) + n*I)
+        push!(test_matrices, sprand(n, n, 0.1) + n * I)
     end
     for (idx, A) in enumerate(test_matrices)
         klu_data = klu_internal_btf(A)
-        pj_data  = pureklu_internal_btf(A)
+        pj_data = pureklu_internal_btf(A)
         @testset "matrix #$idx" begin
             # KLU.jl's Symbolic stores the combined BTF+AMD permutations in P, Q,
             # not the raw BTF outputs, so we just compare those combined results.
@@ -113,10 +113,10 @@ end
     # KLU.jl doesn't expose full_factor; build factorisation objects and run
     # analyze only.
     F_ref = KLU.KLUFactorization(A); KLU.klu_analyze!(F_ref)
-    F_pj  = PureKLU.KLUFactorization(A); F_pj.common.use_fma = Val(USE_FMA)
+    F_pj = PureKLU.KLUFactorization(A); F_pj.common.use_fma = Val(USE_FMA)
     PureKLU.klu_analyze!(F_pj)
     Sym_ref = F_ref.symbolic
-    Sym_pj  = getfield(F_pj, :symbolic)
+    Sym_pj = getfield(F_pj, :symbolic)
     @test Sym_ref.nblocks == Sym_pj.nblocks
     @test Sym_ref.structural_rank == Sym_pj.structural_rank
     @test Sym_ref.nz == Sym_pj.nz
@@ -131,7 +131,7 @@ end
     for n in sizes, density in (0.1, 0.2, 0.4)
         # symmetric pattern: A + A'
         Asym = sprand(n, n, density)
-        Asym = Asym + Asym' + 2n*I
+        Asym = Asym + Asym' + 2n * I
         dropzeros!(Asym)
         Ap0 = Vector{Int64}(Asym.colptr .- 1)
         Ai0 = Vector{Int64}(Asym.rowval .- 1)
@@ -150,11 +150,11 @@ end
 @testset "AMD.amd_order!: matches SuiteSparse AMD on small known patterns" begin
     # 1x1 trivial
     @test PKAMD.amd_order!(1, Int64[0, 0], Int64[], Vector{Int64}(undef, 1)) ==
-          PKAMD.AMD_OK
+        PKAMD.AMD_OK
 
     # diagonal-only
     n = 5
-    Ap = zeros(Int64, n+1)
+    Ap = zeros(Int64, n + 1)
     Ai = Int64[]
     P = Vector{Int64}(undef, n)
     PKAMD.amd_order!(n, Ap, Ai, P)
@@ -163,8 +163,8 @@ end
 
     # chain
     n = 6
-    A = spdiagm(-1 => ones(n-1), 1 => ones(n-1))
-    A = A + n*I
+    A = spdiagm(-1 => ones(n - 1), 1 => ones(n - 1))
+    A = A + n * I
     dropzeros!(A)
     Ap = Vector{Int64}(A.colptr .- 1)
     Ai = Vector{Int64}(A.rowval .- 1)
@@ -179,12 +179,12 @@ end
 @testset "klu_scale!: every scale mode matches KLU.jl's Rs" begin
     Random.seed!(42)
     for scale in (0, 1, 2), n in (5, 10, 25, 50)
-        A = sprand(n, n, 0.2) + n*I
+        A = sprand(n, n, 0.2) + n * I
         # configure both with the same scale mode
-        K_ref = KLU.klu(A; check=false)
-        K_pj  = PureKLU.klu(A; check=false, use_fma=USE_FMA)
+        K_ref = KLU.klu(A; check = false)
+        K_pj = PureKLU.klu(A; check = false, use_fma = USE_FMA)
         K_ref.common.scale = Int32(scale)
-        K_pj.common.scale  = Int32(scale)
+        K_pj.common.scale = Int32(scale)
         KLU.klu_factor!(K_ref)
         PureKLU.klu_factor!(K_pj)
         @test K_ref.Rs ≈ K_pj.Rs
@@ -197,12 +197,12 @@ end
     # property on the refactor hot path.
     Random.seed!(2026)
     for n in (10, 50, 200)
-        A = sprand(n, n, 0.1) + n*I
+        A = sprand(n, n, 0.1) + n * I
         dropzeros!(A)
-        K_ref = KLU.klu(A; check=false)
-        K_pj  = PureKLU.klu(A; check=false, use_fma=USE_FMA)
+        K_ref = KLU.klu(A; check = false)
+        K_pj = PureKLU.klu(A; check = false, use_fma = USE_FMA)
         K_ref.common.scale = Int32(0)
-        K_pj.common.scale  = Int32(0)
+        K_pj.common.scale = Int32(0)
         KLU.klu_factor!(K_ref)
         PureKLU.klu_factor!(K_pj)
         @test K_ref.L == K_pj.L
@@ -232,20 +232,20 @@ end
 @testset "Symbolic struct fields: nz, nblocks, maxblock, nzoff, structural_rank" begin
     Random.seed!(11)
     test_cases = [
-        sprand(5, 5, 0.3) + 5*I,
-        sprand(15, 15, 0.2) + 15*I,
-        sprand(50, 50, 0.05) + 50*I,
-        sprand(100, 100, 0.05) + 100*I,
+        sprand(5, 5, 0.3) + 5 * I,
+        sprand(15, 15, 0.2) + 15 * I,
+        sprand(50, 50, 0.05) + 50 * I,
+        sprand(100, 100, 0.05) + 100 * I,
     ]
     for A in test_cases
         K_ref = KLU.klu(A)
-        K_pj  = PureKLU.klu(A; use_fma=USE_FMA)
+        K_pj = PureKLU.klu(A; use_fma = USE_FMA)
         @test K_ref.symbolic.nz == getfield(K_pj, :symbolic).nz
         @test K_ref.symbolic.nzoff == getfield(K_pj, :symbolic).nzoff
         @test K_ref.symbolic.nblocks == getfield(K_pj, :symbolic).nblocks
         @test K_ref.symbolic.maxblock == getfield(K_pj, :symbolic).maxblock
         @test K_ref.symbolic.structural_rank ==
-              getfield(K_pj, :symbolic).structural_rank
+            getfield(K_pj, :symbolic).structural_rank
     end
 end
 
@@ -254,20 +254,20 @@ end
 @testset "Numeric struct fields: lnz, unz, max_lnz_block, max_unz_block, noffdiag" begin
     Random.seed!(13)
     test_cases = [
-        sprand(5, 5, 0.3) + 5*I,
-        sprand(15, 15, 0.2) + 15*I,
-        sprand(50, 50, 0.05) + 50*I,
-        sprand(100, 100, 0.05) + 100*I,
+        sprand(5, 5, 0.3) + 5 * I,
+        sprand(15, 15, 0.2) + 15 * I,
+        sprand(50, 50, 0.05) + 50 * I,
+        sprand(100, 100, 0.05) + 100 * I,
     ]
     for A in test_cases
         K_ref = KLU.klu(A)
-        K_pj  = PureKLU.klu(A; use_fma=USE_FMA)
+        K_pj = PureKLU.klu(A; use_fma = USE_FMA)
         @test K_ref.numeric.lnz == getfield(K_pj, :numeric).lnz
         @test K_ref.numeric.unz == getfield(K_pj, :numeric).unz
         @test K_ref.numeric.max_lnz_block ==
-              getfield(K_pj, :numeric).max_lnz_block
+            getfield(K_pj, :numeric).max_lnz_block
         @test K_ref.numeric.max_unz_block ==
-              getfield(K_pj, :numeric).max_unz_block
+            getfield(K_pj, :numeric).max_unz_block
         @test K_ref.numeric.nzoff == getfield(K_pj, :numeric).nzoff
         @test K_ref.common.noffdiag == K_pj.common.noffdiag
     end
@@ -277,14 +277,14 @@ end
 
 function strict_match_all(A::SparseMatrixCSC)
     K_ref = KLU.klu(A)
-    K_pj  = PureKLU.klu(A; use_fma=USE_FMA)
+    K_pj = PureKLU.klu(A; use_fma = USE_FMA)
     @test K_ref.p == K_pj.p
     @test K_ref.q == K_pj.q
     @test K_ref.R == K_pj.R
     @test K_ref.Rs == K_pj.Rs
     @test K_ref.L == K_pj.L
     @test K_ref.U == K_pj.U
-    @test K_ref.F == K_pj.F
+    return @test K_ref.F == K_pj.F
 end
 
 # ---------- sparse matrix zoo: structure variety ---------------------------
@@ -292,9 +292,9 @@ end
 @testset "Matrix zoo: arrow patterns" begin
     for n in (10, 25, 50)
         # arrow: dense first row + dense first col + diagonal
-        I_idx = vcat(fill(1, n-1), 2:n, 1:n)
-        J_idx = vcat(2:n, fill(1, n-1), 1:n)
-        V     = vcat(ones(n-1), ones(n-1), Float64(n) .* ones(n))
+        I_idx = vcat(fill(1, n - 1), 2:n, 1:n)
+        J_idx = vcat(2:n, fill(1, n - 1), 1:n)
+        V = vcat(ones(n - 1), ones(n - 1), Float64(n) .* ones(n))
         A = sparse(I_idx, J_idx, V, n, n)
         strict_match_all(A)
     end
@@ -305,8 +305,8 @@ end
         diags = Dict{Int, Vector{Float64}}()
         diags[0] = Float64(n) .* ones(n)
         for d in 1:bw
-            diags[ d] = -ones(n-d)
-            diags[-d] = -ones(n-d)
+            diags[d] = -ones(n - d)
+            diags[-d] = -ones(n - d)
         end
         A = spdiagm((k => v for (k, v) in diags)...)
         dropzeros!(A)
@@ -321,7 +321,7 @@ end
         n = sum(sizes)
         blocks = Any[]
         for sz in sizes
-            push!(blocks, sprand(sz, sz, 0.5) + sz*I)
+            push!(blocks, sprand(sz, sz, 0.5) + sz * I)
         end
         A = blockdiag(blocks...)
         strict_match_all(A)
@@ -331,10 +331,10 @@ end
 @testset "Matrix zoo: upper triangular + sparse lower entries" begin
     Random.seed!(7)
     for n in (10, 30, 60)
-        U = triu(sprand(n, n, 0.3)) + n*I
+        U = triu(sprand(n, n, 0.3)) + n * I
         # add a few sparse lower entries
         for _ in 1:max(1, n ÷ 4)
-            i = rand(2:n); j = rand(1:i-1)
+            i = rand(2:n); j = rand(1:(i - 1))
             U[i, j] = randn()
         end
         strict_match_all(U)
@@ -346,7 +346,7 @@ end
     for n in (15, 30, 60)
         density = 1.5 / n  # roughly 1.5 entries per row
         A = sprand(n, n, density)
-        A = A + (n+1) * I
+        A = A + (n + 1) * I
         dropzeros!(A)
         strict_match_all(A)
     end
@@ -357,8 +357,8 @@ end
     for n in (10, 20, 50)
         Are = sprand(n, n, 0.2)
         Aim = sprand(n, n, 0.2)
-        A = Are + im*Aim + n*I
-        K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma=false)
+        A = Are + im * Aim + n * I
+        K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma = false)
         @test K_ref.p == K_pj.p
         @test K_ref.q == K_pj.q
         @test K_ref.L ≈ K_pj.L
@@ -371,8 +371,8 @@ end
 
 @testset "solve: vector, matrix, complex RHS all match" begin
     Random.seed!(7)
-    A = sprand(20, 20, 0.2) + 20*I
-    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma=USE_FMA)
+    A = sprand(20, 20, 0.2) + 20 * I
+    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma = USE_FMA)
 
     # vector RHS
     b = randn(20)
@@ -385,14 +385,14 @@ end
     # complex RHS on real factor
     bc = randn(ComplexF64, 20)
     x_ref = K_ref \ bc
-    x_pj  = K_pj  \ bc
+    x_pj = K_pj \ bc
     @test x_ref ≈ x_pj
 end
 
 @testset "tsolve / adjoint solve match" begin
     Random.seed!(8)
-    A = sprand(20, 20, 0.2) + 20*I
-    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma=USE_FMA)
+    A = sprand(20, 20, 0.2) + 20 * I
+    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma = USE_FMA)
     b = randn(20)
     B = randn(20, 4)
 
@@ -405,19 +405,19 @@ end
 @testset "Complex transpose vs adjoint: both match" begin
     Random.seed!(9)
     A = sprand(ComplexF64, 15, 15, 0.3)
-    A = A + 15*I
-    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma=false)
+    A = A + 15 * I
+    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma = false)
     b = randn(ComplexF64, 15)
 
     # adjoint: A^H x = b
     x_ref_adj = K_ref' \ b
-    x_pj_adj  = K_pj' \ b
+    x_pj_adj = K_pj' \ b
     @test x_ref_adj ≈ x_pj_adj
     @test A' * x_pj_adj ≈ b
 
     # transpose: A^T x = b
     x_ref_tr = transpose(K_ref) \ b
-    x_pj_tr  = transpose(K_pj) \ b
+    x_pj_tr = transpose(K_pj) \ b
     @test x_ref_tr ≈ x_pj_tr
     @test transpose(A) * x_pj_tr ≈ b
 end
@@ -428,21 +428,21 @@ end
     Random.seed!(17)
     # build a pattern and two value sets sharing it
     for n in (10, 20, 50)
-        proto = sprand(n, n, 0.2) + n*I
+        proto = sprand(n, n, 0.2) + n * I
         I_idx, J_idx, _ = findnz(proto)
         V1 = randn(length(I_idx)) .+ 0.5
         V2 = randn(length(I_idx)) .+ 0.5
         A = sparse(I_idx, J_idx, V1, n, n)
         B = sparse(I_idx, J_idx, V2, n, n)
         K_ref = KLU.klu(A); KLU.klu!(K_ref, B)
-        K_pj  = PureKLU.klu(A; use_fma=USE_FMA); PureKLU.klu!(K_pj, B)
+        K_pj = PureKLU.klu(A; use_fma = USE_FMA); PureKLU.klu!(K_pj, B)
         @test K_ref.L == K_pj.L
         @test K_ref.U == K_pj.U
         @test K_ref.F == K_pj.F
         @test K_ref.Rs == K_pj.Rs
         # refactor with just nzval
         K_ref2 = KLU.klu(A); KLU.klu!(K_ref2, B.nzval)
-        K_pj2  = PureKLU.klu(A; use_fma=USE_FMA); PureKLU.klu!(K_pj2, B.nzval)
+        K_pj2 = PureKLU.klu(A; use_fma = USE_FMA); PureKLU.klu!(K_pj2, B.nzval)
         @test K_ref2.L == K_pj2.L
         @test K_ref2.U == K_pj2.U
         @test K_ref2.F == K_pj2.F
@@ -454,10 +454,10 @@ end
 @testset "Custom P/Q via klu_analyze_given path" begin
     Random.seed!(33)
     for n in (5, 10, 20)
-        A = sprand(n, n, 0.3) + n*I
+        A = sprand(n, n, 0.3) + n * I
         # When btf=0 and ordering=2, KLU uses identity-ish processing.
-        K_ref = KLU.klu(A; check=false)
-        K_pj  = PureKLU.klu(A; check=false, use_fma=USE_FMA)
+        K_ref = KLU.klu(A; check = false)
+        K_pj = PureKLU.klu(A; check = false, use_fma = USE_FMA)
         K_ref.common.btf = Int32(0); K_pj.common.btf = Int32(0)
         K_ref.common.ordering = Int32(2); K_pj.common.ordering = Int32(2)
         KLU.klu_factor!(K_ref)
@@ -477,15 +477,17 @@ end
     for k in (3, 5, 8, 12, 16, 20, 25)
         n = k * k
         diag_main = 4.0 * ones(n)
-        diag_off1 = -1.0 * ones(n-1)
-        for i in 1:n-1
+        diag_off1 = -1.0 * ones(n - 1)
+        for i in 1:(n - 1)
             if i % k == 0
                 diag_off1[i] = 0.0
             end
         end
-        diag_offk = -1.0 * ones(n-k)
-        A = spdiagm(-k => diag_offk, -1 => diag_off1, 0 => diag_main,
-                    1 => diag_off1, k => diag_offk)
+        diag_offk = -1.0 * ones(n - k)
+        A = spdiagm(
+            -k => diag_offk, -1 => diag_off1, 0 => diag_main,
+            1 => diag_off1, k => diag_offk
+        )
         dropzeros!(A)
         strict_match_all(A)
     end
@@ -503,13 +505,13 @@ end
             push!(Idx, i); push!(Jdx, j)
             push!(Idx, j); push!(Jdx, i)
             if i + 3 <= n
-                push!(Idx, i); push!(Jdx, i+3)
-                push!(Idx, i+3); push!(Jdx, i)
+                push!(Idx, i); push!(Jdx, i + 3)
+                push!(Idx, i + 3); push!(Jdx, i)
             end
         end
         V = randn(length(Idx)) .+ 1.5
         # accumulate diagonal mass
-        A = sparse(Idx, Jdx, V, n, n) + n*I
+        A = sparse(Idx, Jdx, V, n, n) + n * I
         dropzeros!(A)
         strict_match_all(A)
     end
@@ -520,7 +522,7 @@ end
 @testset "Matrix zoo: 200×200 and 300×300 random (strict)" begin
     Random.seed!(2024)
     for n in (200, 300), density in (0.01, 0.02, 0.05)
-        A = sprand(n, n, density) + n*I
+        A = sprand(n, n, density) + n * I
         dropzeros!(A)
         strict_match_all(A)
     end
@@ -534,8 +536,8 @@ end
         n = nb * block_sz
         Idx = Int[]; Jdx = Int[]
         for b in 1:nb
-            base = (b-1)*block_sz + 1
-            for i in base:(base+block_sz-1), j in base:(base+block_sz-1)
+            base = (b - 1) * block_sz + 1
+            for i in base:(base + block_sz - 1), j in base:(base + block_sz - 1)
                 push!(Idx, i); push!(Jdx, j)
             end
             if b < nb
@@ -543,7 +545,7 @@ end
             end
         end
         V = randn(length(Idx)) .+ 1.5
-        A = sparse(Idx, Jdx, V, n, n) + n*I
+        A = sparse(Idx, Jdx, V, n, n) + n * I
         dropzeros!(A)
         strict_match_all(A)
     end
@@ -560,10 +562,10 @@ end
     # accumulation order in subsequent refactors.)
     Random.seed!(73)
     n = 30
-    proto = sprand(n, n, 0.2) + n*I
+    proto = sprand(n, n, 0.2) + n * I
     I_idx, J_idx, _ = findnz(proto)
     K_ref = KLU.klu(proto)
-    K_pj  = PureKLU.klu(proto; use_fma=USE_FMA)
+    K_pj = PureKLU.klu(proto; use_fma = USE_FMA)
     for iter in 1:5
         V = randn(length(I_idx)) .+ 0.7
         B = sparse(I_idx, J_idx, V, n, n)
@@ -583,9 +585,9 @@ end
 @testset "Consistency: L*U + F = Rs \\ A[p,q] for both implementations" begin
     Random.seed!(123)
     for n in (10, 30, 60, 100)
-        A = sprand(n, n, 0.15) + n*I
+        A = sprand(n, n, 0.15) + n * I
         dropzeros!(A)
-        for K in (KLU.klu(A), PureKLU.klu(A; use_fma=USE_FMA))
+        for K in (KLU.klu(A), PureKLU.klu(A; use_fma = USE_FMA))
             Rs = Diagonal(K.Rs)
             @test Rs \ A[K.p, K.q] ≈ K.L * K.U + K.F
         end
@@ -596,8 +598,8 @@ end
 
 @testset "ldiv! vs \\\\: both implementations consistent" begin
     Random.seed!(81)
-    A = sprand(40, 40, 0.15) + 40*I
-    K_pj = PureKLU.klu(A; use_fma=USE_FMA)
+    A = sprand(40, 40, 0.15) + 40 * I
+    K_pj = PureKLU.klu(A; use_fma = USE_FMA)
     K_ref = KLU.klu(A)
     b = randn(40)
     x1 = K_pj \ b
@@ -619,9 +621,9 @@ end
 @testset "klu_analyze! with user-given P=Q=identity (analyze_given path)" begin
     Random.seed!(91)
     n = 12
-    A = sprand(n, n, 0.3) + n*I
-    P_user = Vector{Int64}(0:(n-1))     # 0-based identity
-    Q_user = Vector{Int64}(0:(n-1))
+    A = sprand(n, n, 0.3) + n * I
+    P_user = Vector{Int64}(0:(n - 1))     # 0-based identity
+    Q_user = Vector{Int64}(0:(n - 1))
     K_ref = KLU.KLUFactorization(A)
     KLU.klu_analyze!(K_ref, copy(P_user), copy(Q_user))
     K_pj = PureKLU.KLUFactorization(A)
@@ -641,7 +643,7 @@ end
 @testset "Degenerate sizes 1x1, 2x2" begin
     # 1x1
     A1 = sparse(reshape([3.0], 1, 1))
-    K_ref = KLU.klu(A1); K_pj = PureKLU.klu(A1; use_fma=USE_FMA)
+    K_ref = KLU.klu(A1); K_pj = PureKLU.klu(A1; use_fma = USE_FMA)
     @test K_ref.p == K_pj.p
     @test K_ref.q == K_pj.q
     @test K_ref.U == K_pj.U
@@ -649,13 +651,13 @@ end
 
     # 2x2 various
     for M in (
-        Float64[1 0; 0 2],
-        Float64[2 1; 0 3],
-        Float64[1 0; 1 2],
-        Float64[3 1; 1 3],
-    )
+            Float64[1 0; 0 2],
+            Float64[2 1; 0 3],
+            Float64[1 0; 1 2],
+            Float64[3 1; 1 3],
+        )
         A = sparse(M)
-        K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma=USE_FMA)
+        K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma = USE_FMA)
         @test K_ref.p == K_pj.p
         @test K_ref.q == K_pj.q
         @test K_ref.L == K_pj.L
@@ -670,15 +672,15 @@ end
     for n in (20, 40, 80)
         # structurally symmetric pattern with unsymmetric values
         Asym = sprand(n, n, 0.15)
-        Asym = Asym + Asym' + n*I
+        Asym = Asym + Asym' + n * I
         dropzeros!(Asym)
         I_idx, J_idx, _ = findnz(Asym)
-        A1 = sparse(I_idx, J_idx, randn(length(I_idx)) .+ 1.5, n, n) + n*I
+        A1 = sparse(I_idx, J_idx, randn(length(I_idx)) .+ 1.5, n, n) + n * I
         dropzeros!(A1)
         strict_match_all(A1)
 
         # structurally unsymmetric
-        A2 = tril(sprand(n, n, 0.2)) + triu(sprand(n, n, 0.05)) + n*I
+        A2 = tril(sprand(n, n, 0.2)) + triu(sprand(n, n, 0.05)) + n * I
         dropzeros!(A2)
         strict_match_all(A2)
     end
