@@ -50,8 +50,11 @@ mutable struct KLUCommon{Ti<:Integer}
     # to the `use_fma` kwarg of [`klu`](@ref); both forms are normalised
     # here.
     use_fma::Union{Val{true}, Val{false}}
-    # `nothing` selects the auto heuristic in `_resolve_fully_preallocated`.
-    fully_preallocated::Union{Bool, Nothing}
+    # Auto-mode (`fully_preallocated=nothing` at the `klu(...)` kwarg) is
+    # resolved to a concrete `Bool` in `klu(...)` after `klu_analyze!` runs;
+    # the direct `klu_factor!(K)` path uses whatever is set here (default
+    # `false`).
+    fully_preallocated::Bool
 end
 
 function KLUCommon{Ti}() where {Ti<:Integer}
@@ -62,7 +65,7 @@ function KLUCommon{Ti}() where {Ti<:Integer}
         Ti(EMPTY), Ti(EMPTY), Ti(EMPTY), Ti(0),
         EMPTY_FLOAT, EMPTY_FLOAT, EMPTY_FLOAT, EMPTY_FLOAT, 0.0,
         Val(true),
-        nothing,
+        false,
     )
     return C
 end
@@ -99,7 +102,7 @@ function klu_defaults!(C::KLUCommon{Ti}) where {Ti}
     C.rgrowth = EMPTY_FLOAT
     C.work = 0.0
     C.use_fma = Val(true)
-    C.fully_preallocated = nothing
+    C.fully_preallocated = false
     return C
 end
 

@@ -219,15 +219,8 @@ KLUNumeric{Tv, Ti, Tr}() where {Tv, Ti<:Integer, Tr<:Real} = KLUNumeric{Tv, Ti, 
     return ceil(Int, initmem_amd * est) + nk
 end
 
-@inline function _resolve_fully_preallocated(common::KLUCommon, Sym::KLUSymbolic)
-    fp = common.fully_preallocated
-    fp === nothing || return fp::Bool
-    return Int(Sym.maxblock) <= AUTO_PREALLOC_MAXBLOCK
-end
-
 function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti}) where {Tv, Ti}
-    return _alloc_numeric(Tv, Sym, common,
-                          _resolve_fully_preallocated(common, Sym))
+    return _alloc_numeric(Tv, Sym, common, common.fully_preallocated)
 end
 
 function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti},
