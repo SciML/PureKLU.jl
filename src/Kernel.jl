@@ -623,7 +623,7 @@ end
 # When `fma_val == Val(true)` (default) we use `muladd`, which LLVM
 # lowers to `vfnmadd*sd` on hardware with FMA -- one rounding, slightly
 # more accurate, but L/U entries can differ from KLU.jl by 1 ULP.
-function _kernel_lsolve_numeric!(Pinv::Vector{Ti},
+@inline function _kernel_lsolve_numeric!(Pinv::Vector{Ti},
                                  block_Li::Vector{Ti}, block_Lx::Vector{Tv},
                                  Stack::Vector{Ti}, Lip::AbstractVector{Ti},
                                  top::Int, n::Int, Llen::AbstractVector{Ti},
