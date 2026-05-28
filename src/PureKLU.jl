@@ -189,8 +189,19 @@ function klu_factor!(K::KLUFactorization{Tv, Ti}; check::Bool=true,
     end
     if getfield(K, :symbolic) !== nothing && K.common.status >= KLU_OK
         K.common.halt_if_singular = (!allowsingular && check) ? Cint(1) : Cint(0)
-        Num = klu_factor!(getfield(K, :symbolic), K.colptr, K.rowval, K.nzval,
-                          K.common; allowsingular)
+        # Reuse the existing numeric struct (and its preallocated block
+        # capacities + kernel workspace) when possible so subsequent
+        # `klu_factor!` calls on the same `KLUFactorization` allocate
+        # nothing beyond the (possible) geometric grow path in the kernel.
+        existing = getfield(K, :numeric)
+        Sym = getfield(K, :symbolic)
+        if existing === nothing
+            Num = klu_factor!(Sym, K.colptr, K.rowval, K.nzval, K.common;
+                              allowsingular)
+        else
+            Num = klu_factor!(Sym, K.colptr, K.rowval, K.nzval, K.common,
+                              existing; allowsingular)
+        end
         K.common.halt_if_singular = Cint(1)
         if K.common.status < KLU_OK && check
             kluerror(K.common)

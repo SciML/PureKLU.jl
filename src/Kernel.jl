@@ -87,6 +87,33 @@ end
 end
 
 """
+    KernelWorkspace{Tv, Ti}
+
+Scratch storage used by a single block's LU kernel.  `firstrow_ref` is
+persistent across blocks so `_kernel_lpivot!` can update / read it
+without allocating a fresh `Ref` per column.
+"""
+mutable struct KernelWorkspace{Tv, Ti}
+    Pinv::Vector{Ti}
+    Stack::Vector{Ti}
+    Flag::Vector{Ti}
+    Lpend::Vector{Ti}
+    Ap_pos::Vector{Ti}
+    X::Vector{Tv}
+    firstrow_ref::Base.RefValue{Int}
+end
+
+KernelWorkspace{Tv, Ti}(n::Integer) where {Tv, Ti} = KernelWorkspace{Tv, Ti}(
+    Vector{Ti}(undef, n),
+    Vector{Ti}(undef, n),
+    Vector{Ti}(undef, n),
+    Vector{Ti}(undef, n),
+    Vector{Ti}(undef, n),
+    zeros(Tv, n),
+    Ref(0),
+)
+
+"""
     KLUNumericBlock{Tv, Ti}
 
 Per-block LU storage. `Li`/`Lx` hold the strict-lower-triangular entries
@@ -94,16 +121,24 @@ of `L` for every column of the block, packed contiguously; column `k`
 (0-based in the block) starts at offset `Lip[k+1]+1` in Julia indexing and
 has length `Llen[k+1]`. Same convention for `Ui`/`Ux`. `L` is unit lower
 triangular and its diagonal is not stored.
+
+`Li`/`Lx` and `Ui`/`Ux` are sized to *capacity*: the actual number of
+populated slots is `Li_used` / `Ui_used`.  `length(Li)` (== `length(Lx)`)
+is the current capacity; `klu_factor!` overwrites the prefix and only
+calls `resize!` on the geometric grow path when the AMD-estimated
+capacity proves insufficient.
 """
 mutable struct KLUNumericBlock{Tv, Ti<:Integer}
     Li::Vector{Ti}
     Lx::Vector{Tv}
+    Li_used::Int
     Ui::Vector{Ti}
     Ux::Vector{Tv}
+    Ui_used::Int
 end
 
 KLUNumericBlock{Tv, Ti}() where {Tv, Ti} = KLUNumericBlock{Tv, Ti}(
-    Ti[], Tv[], Ti[], Tv[]
+    Ti[], Tv[], 0, Ti[], Tv[], 0
 )
 
 """
@@ -141,6 +176,12 @@ mutable struct KLUNumeric{Tv, Ti<:Integer, Tr<:Real}
     # `Rs[k] = Rs[Pnum[k]]` shuffle at the tail of factor/refactor is
     # skipped entirely in the unscaled case.
     Xtmp::Vector{Tr}
+    # Cached kernel workspace and per-block pivot permutation buffer.
+    # Sized to `max(1, maxblock)` at numeric-alloc time so re-factor
+    # calls (`klu_factor!`) reuse them instead of allocating fresh
+    # length-`maxblock` arrays each call.
+    wk::KernelWorkspace{Tv, Ti}
+    Pblock::Vector{Ti}
 end
 
 KLUNumeric{Tv, Ti}(args...) where {Tv, Ti} =
@@ -150,8 +191,32 @@ function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti})
     n = Int(Sym.n)
     nblocks = Int(Sym.nblocks)
     nzoff = Int(Sym.nzoff)
+    maxblock = max(1, Int(Sym.maxblock))
     scale = Int(common.scale)
     Tr = _real_eltype(Tv)
+    # Pre-size each non-singleton block's L/U storage to AMD's Lnz
+    # estimate, scaled by `common.initmem_amd` (default 1.2, matching
+    # SuiteSparse).  COLAMD doesn't supply an estimate, so use the
+    # SuiteSparse fallback `nk*nk/4`.  This means `klu_factor!`'s hot
+    # loop usually never resizes.
+    initmem_amd = common.initmem_amd
+    LUbx = Vector{KLUNumericBlock{Tv, Ti}}(undef, nblocks)
+    @inbounds for b in 1:nblocks
+        k1 = Int(Sym.R[b]); k2 = Int(Sym.R[b+1])
+        nk = k2 - k1
+        bk = KLUNumericBlock{Tv, Ti}()
+        if nk > 1
+            est = Sym.Lnz[b]
+            if !(est >= 0)
+                # COLAMD / unknown: fall back to a coarse upper bound.
+                est = Float64(nk) * Float64(nk) / 4
+            end
+            cap = ceil(Int, initmem_amd * est) + nk
+            resize!(bk.Li, cap); resize!(bk.Lx, cap)
+            resize!(bk.Ui, cap); resize!(bk.Ux, cap)
+        end
+        LUbx[b] = bk
+    end
     Num = KLUNumeric{Tv, Ti, Tr}(
         Sym.n, Sym.nblocks, Ti(0), Ti(0), Ti(1), Ti(1),
         Vector{Ti}(undef, n),
@@ -160,7 +225,7 @@ function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti})
         Vector{Ti}(undef, n),
         Vector{Ti}(undef, n),
         Vector{Ti}(undef, n),
-        KLUNumericBlock{Tv, Ti}[KLUNumericBlock{Tv, Ti}() for _ in 1:nblocks],
+        LUbx,
         Vector{Tv}(undef, n),
         scale > 0 ? zeros(Tr, n) : Tr[],
         zeros(Ti, n + 1),
@@ -169,8 +234,61 @@ function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti})
         Sym.nzoff,
         Vector{Tv}(undef, n),
         scale > 0 ? Vector{Tr}(undef, n) : Tr[],
+        KernelWorkspace{Tv, Ti}(maxblock),
+        Vector{Ti}(undef, maxblock),
     )
     return Num
+end
+
+# Reuse an existing `KLUNumeric` for a fresh factor on the same symbolic
+# structure.  Zeros the `Offp` prefix and the `Rs` accumulator when
+# scaling is enabled (matching `_alloc_numeric`'s initial state); other
+# fields are overwritten by the factor proper.  Adjusts the `Rs`/`Xtmp`
+# buffers if `common.scale` changed since the previous factor.
+function _prepare_numeric_for_reuse!(Num::KLUNumeric{Tv, Ti, Tr},
+                                     Sym::KLUSymbolic{Ti},
+                                     common::KLUCommon{Ti}) where {Tv, Ti, Tr}
+    n = Int(Sym.n)
+    scale = Int(common.scale)
+    if scale > 0
+        if length(Num.Rs) != n
+            resize!(Num.Rs, n)
+        end
+        @inbounds for k in 1:n
+            Num.Rs[k] = zero(Tr)
+        end
+        if length(Num.Xtmp) != n
+            resize!(Num.Xtmp, n)
+        end
+    else
+        if !isempty(Num.Rs)
+            empty!(Num.Rs); empty!(Num.Xtmp)
+        end
+    end
+    @inbounds for i in eachindex(Num.Offp)
+        Num.Offp[i] = Ti(0)
+    end
+    return Num
+end
+
+# Geometric grow for `Li`/`Lx` (`which = :L`) or `Ui`/`Ux` (`which = :U`).
+# `target` is the minimum new capacity required.  We grow by
+# `max(target, ceil(memgrow * current_cap))` so amortised cost stays
+# linear even when AMD's estimate is consistently low.
+@noinline function _klu_grow!(block::KLUNumericBlock{Tv, Ti}, which::Symbol,
+                              target::Int, memgrow::Float64) where {Tv, Ti}
+    if which === :L
+        cur = length(block.Li)
+        new = max(target, ceil(Int, memgrow * cur))
+        resize!(block.Li, new)
+        resize!(block.Lx, new)
+    else
+        cur = length(block.Ui)
+        new = max(target, ceil(Int, memgrow * cur))
+        resize!(block.Ui, new)
+        resize!(block.Ux, new)
+    end
+    return nothing
 end
 
 # ---------- scaling --------------------------------------------------------
@@ -258,29 +376,6 @@ end
 
 @inline _kflip(k::Integer) = -k - 2
 @inline _kunflip(k::Integer) = k < -1 ? _kflip(k) : k
-
-"""
-    KernelWorkspace{Tv, Ti}
-
-Scratch storage used by a single block's LU kernel.
-"""
-mutable struct KernelWorkspace{Tv, Ti}
-    Pinv::Vector{Ti}
-    Stack::Vector{Ti}
-    Flag::Vector{Ti}
-    Lpend::Vector{Ti}
-    Ap_pos::Vector{Ti}
-    X::Vector{Tv}
-end
-
-KernelWorkspace{Tv, Ti}(n::Integer) where {Tv, Ti} = KernelWorkspace{Tv, Ti}(
-    Vector{Ti}(undef, n),
-    Vector{Ti}(undef, n),
-    Vector{Ti}(undef, n),
-    Vector{Ti}(undef, n),
-    Vector{Ti}(undef, n),
-    zeros(Tv, n),
-)
 
 # DFS for the symbolic Lsolve; ports klu_kernel.c::dfs.  Writes new L row
 # indices for column k into `block_Li` at offsets `Lip[k+1]+1 .. Lip[k+1]+l_length`.
@@ -461,7 +556,7 @@ function _kernel_lpivot!(diagrow::Int, k::Int, n::Int,
                          tol::Float64, X::Vector{Tv},
                          block_Li::Vector{Ti}, block_Lx::Vector{Tv},
                          Lip::AbstractVector{Ti}, Llen::AbstractVector{Ti},
-                         Pinv::Vector{Ti}, firstrow_ref::Ref{Int},
+                         Pinv::Vector{Ti}, firstrow_ref::Base.RefValue{Int},
                          common::KLUCommon{Ti}, fma_val::Val) where {Tv, Ti}
     Tr = _real_eltype(Tv)
     if Llen[k+1] == 0
@@ -627,26 +722,27 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
         wk.Pinv[k] = Ti(_kflip(k-1))
     end
 
-    resize!(block.Li, 0); resize!(block.Lx, 0)
-    resize!(block.Ui, 0); resize!(block.Ux, 0)
-    # Pre-grow capacity so per-column resize!(., old_len + n) grows in place
-    # most of the time and amortised reallocs disappear from the hot path.
-    cap_hint = 16 * n
-    sizehint!(block.Li, cap_hint)
-    sizehint!(block.Lx, cap_hint)
-    sizehint!(block.Ui, cap_hint)
-    sizehint!(block.Ux, cap_hint)
+    # Reset per-block used counts.  The underlying Vector capacities are
+    # already sized to AMD's lnz estimate by `_alloc_numeric` and persist
+    # across factor/refactor; we overwrite the live prefix in place.
+    block.Li_used = 0
+    block.Ui_used = 0
+    memgrow = common.memgrow
 
     lnz = 0
     unz = 0
-    firstrow_ref = Ref(0)
+    firstrow_ref = wk.firstrow_ref
+    firstrow_ref[] = 0
 
     for k in 0:(n-1)
-        # Reserve n slots for column k's L pattern in block.Li/Lx
-        old_len = length(block.Li)
+        # Reserve `n` slots for column k's L pattern.  If capacity is
+        # insufficient, grow geometrically; otherwise just record the
+        # starting offset.
+        old_len = block.Li_used
         @inbounds Lip[k+1] = Ti(old_len)
-        resize!(block.Li, old_len + n)
-        resize!(block.Lx, old_len + n)
+        if old_len + n > length(block.Li)
+            _klu_grow!(block, :L, old_len + n, memgrow)
+        end
 
         top = _kernel_lsolve_symbolic!(n, k, Ap, Ai, Q, wk.Pinv, wk.Stack,
                                        wk.Flag, wk.Lpend, wk.Ap_pos,
@@ -673,19 +769,21 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
             end
         end
 
-        # Shrink L storage back to just the entries used
+        # Record actual L slots used (no shrink -- the slack is just
+        # unused capacity for the next column).
         @inbounds lip_k = Int(Lip[k+1])
         @inbounds llen_k = Int(Llen[k+1])
-        resize!(block.Li, lip_k + llen_k)
-        resize!(block.Lx, lip_k + llen_k)
+        block.Li_used = lip_k + llen_k
 
-        # Build U for this column from Stack[top..n-1] and X
-        u_off = length(block.Ui)
+        # Build U for this column from Stack[top..n-1] and X.  Index-write
+        # path: reserve `ulen` slots after the current used prefix.
+        u_off = block.Ui_used
         @inbounds Uip[k+1] = Ti(u_off)
         ulen = n - top
         @inbounds Ulen[k+1] = Ti(ulen)
-        resize!(block.Ui, u_off + ulen)
-        resize!(block.Ux, u_off + ulen)
+        if u_off + ulen > length(block.Ui)
+            _klu_grow!(block, :U, u_off + ulen, memgrow)
+        end
         @inbounds for s in top:(n-1)
             j = Int(wk.Stack[s+1])
             idx = u_off + (s - top) + 1
@@ -693,6 +791,7 @@ function klu_kernel!(nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
             block.Ux[idx] = wk.X[j+1]
             wk.X[j+1] = zero(Tv)
         end
+        block.Ui_used = u_off + ulen
 
         Udiag[k+1] = pivot
 
@@ -737,24 +836,38 @@ to `klu_kernel!`.
 """
 function klu_factor!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
                      Ax::Vector{Tv}, common::KLUCommon{Ti};
-                     allowsingular::Bool=false) where {Tv, Ti}
+                     allowsingular::Bool=false,
+                     ) where {Tv, Ti}
     # `common.use_fma` is a `Union{Val{true},Val{false}}`, so this lookup
     # is type-stable and the function barrier below specialises the
     # implementation for each variant.
-    return _klu_factor_impl!(Sym, Ap, Ai, Ax, common, common.use_fma;
+    return _klu_factor_impl!(Sym, Ap, Ai, Ax, common, common.use_fma, nothing,
+                             allowsingular)
+end
+
+# Variant that reuses an existing `KLUNumeric` (its block capacities and
+# kernel workspace) instead of fresh-allocating one.  Used by the
+# `KLUFactorization` top-level entry point on warm calls.
+function klu_factor!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
+                     Ax::Vector{Tv}, common::KLUCommon{Ti},
+                     reuse::KLUNumeric{Tv, Ti};
+                     allowsingular::Bool=false,
+                     ) where {Tv, Ti}
+    return _klu_factor_impl!(Sym, Ap, Ai, Ax, common, common.use_fma, reuse,
                              allowsingular)
 end
 
 function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
                            Ax::Vector{Tv}, common::KLUCommon{Ti},
-                           fma_val::Val;
-                           allowsingular::Bool=false) where {Tv, Ti}
+                           fma_val::Val,
+                           reuse::Union{KLUNumeric{Tv, Ti}, Nothing},
+                           allowsingular::Bool) where {Tv, Ti}
     common.status = Cint(KLU_OK)
     common.numerical_rank = Ti(EMPTY)
     common.singular_col = Ti(EMPTY)
     common.noffdiag = Ti(0)
 
-    Num = _alloc_numeric(Tv, Sym, common)
+    Num = reuse === nothing ? _alloc_numeric(Tv, Sym, common) : _prepare_numeric_for_reuse!(reuse, Sym, common)
     n = Int(Sym.n)
     nblocks = Int(Sym.nblocks)
     nzoff = Int(Sym.nzoff)
@@ -785,8 +898,8 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
     max_lnz_block = 1
     max_unz_block = 1
 
-    wk = KernelWorkspace{Tv, Ti}(max(1, Int(Sym.maxblock)))
-    Pblock = Vector{Ti}(undef, max(1, Int(Sym.maxblock)))
+    wk = Num.wk
+    Pblock = Num.Pblock
 
     for block in 1:nblocks
         k1 = Int(R[block])
