@@ -276,8 +276,13 @@ function klu(n::Integer, colptr::Vector{Ti}, rowval::Vector{Ti}, nzval::Vector{T
              ) where {Ti<:KLUITypes, Tv<:KLUGenericTypes}
     K = KLUFactorization(n, colptr, rowval, nzval)
     K.common.use_fma = _as_val(use_fma)
-    K.common.fully_preallocated = fully_preallocated
-    return full_factor ? klu_factor!(K; check, allowsingular) : klu_analyze!(K; check)
+    if fully_preallocated isa Bool
+        K.common.fully_preallocated = fully_preallocated
+        return full_factor ? klu_factor!(K; check, allowsingular) : klu_analyze!(K; check)
+    end
+    klu_analyze!(K; check)
+    K.common.fully_preallocated = Int(getfield(K, :symbolic).maxblock) <= AUTO_PREALLOC_MAXBLOCK
+    return full_factor ? klu_factor!(K; check, allowsingular) : K
 end
 
 function klu(A::SparseMatrixCSC{Tv, Ti}; check::Bool=true,
