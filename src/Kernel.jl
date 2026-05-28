@@ -214,12 +214,30 @@ KLUNumeric{Tv, Ti, Tr}() where {Tv, Ti<:Integer, Tr<:Real} = KLUNumeric{Tv, Ti, 
     Ti[],
 )
 
+# Multiple of the block's input nonzero count used as an upper ceiling on
+# the AMD-estimated initial capacity.  For highly-structured matrices
+# (banded, arrow, ...) AMD predicts the block fills in near-densely and
+# `Lnz` is `nk*(nk+1)/2`, which over-allocates the `Li/Lx/Ui/Ux` buffers
+# by 1-3 orders of magnitude versus the actual fill (e.g. arrow_n500:
+# 125k estimated vs 499 used).  Real fill rarely exceeds ~20x the input
+# nonzeros for these orderings, so we cap the *initial* allocation at
+# `FILL_CEILING_MULT * innz` and let the geometric `_klu_grow!` absorb the
+# rare underestimate.  Chosen so the well-estimated dense/random cases
+# (fill ratio ~10-20x, where AMD is accurate) still get a cap >= their
+# final size and incur no grows.  Does not change numerical results.
+const FILL_CEILING_MULT = 28
+
 # `nk*(nk+1)/2` is a provable upper bound on `block.Li_used + nk` (the
 # kernel's reserve check): column `k` writes at most `nk-1-k` off-
 # diagonals, so the cumulative sum is maximised at `k = nk-1`.  Symmetric
 # for `Ui`.  Sizing to this bound makes `_klu_grow!` provably unreachable.
+#
+# `innz` is a (possibly loose) upper bound on the block's input nonzeros;
+# `FILL_CEILING_MULT * innz + nk` ceilings the AMD estimate so structured
+# blocks are not over-allocated.  The ceiling is never applied below `nk`
+# (a single full column) to keep at least a column of slack.
 @inline function _block_cap(nk::Int, lnz_est::Float64, initmem_amd::Float64,
-                            fully_preallocated::Bool)
+                            fully_preallocated::Bool, innz::Int)
     if fully_preallocated
         return (nk * (nk + 1)) >>> 1
     end
@@ -227,15 +245,19 @@ KLUNumeric{Tv, Ti, Tr}() where {Tv, Ti<:Integer, Tr<:Real} = KLUNumeric{Tv, Ti, 
     if !(est >= 0)
         est = Float64(nk) * Float64(nk) / 4
     end
-    return ceil(Int, initmem_amd * est) + nk
-end
-
-function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti}) where {Tv, Ti}
-    return _alloc_numeric(Tv, Sym, common, common.fully_preallocated)
+    cap = ceil(Int, initmem_amd * est) + nk
+    ceil_cap = FILL_CEILING_MULT * innz + nk
+    return min(cap, max(ceil_cap, nk))
 end
 
 function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti},
-                        fully_preallocated::Bool) where {Tv, Ti}
+                        Ap::Union{Vector{Ti}, Nothing}=nothing) where {Tv, Ti}
+    return _alloc_numeric(Tv, Sym, common, common.fully_preallocated, Ap)
+end
+
+function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti},
+                        fully_preallocated::Bool,
+                        Ap::Union{Vector{Ti}, Nothing}=nothing) where {Tv, Ti}
     n = Int(Sym.n)
     nblocks = Int(Sym.nblocks)
     nzoff = Int(Sym.nzoff)
@@ -243,13 +265,27 @@ function _alloc_numeric(::Type{Tv}, Sym::KLUSymbolic{Ti}, common::KLUCommon{Ti},
     scale = Int(common.scale)
     Tr = _real_eltype(Tv)
     initmem_amd = common.initmem_amd
+    Q = Sym.Q
     LUbx = Vector{KLUNumericBlock{Tv, Ti}}(undef, nblocks)
     @inbounds for b in 1:nblocks
         k1 = Int(Sym.R[b]); k2 = Int(Sym.R[b+1])
         nk = k2 - k1
         bk = KLUNumericBlock{Tv, Ti}()
         if nk > 1
-            cap = _block_cap(nk, Sym.Lnz[b], initmem_amd, fully_preallocated)
+            # Loose upper bound on the block's input nonzeros: total entries
+            # in the block's columns (in original-column space via `Q`),
+            # counting all rows.  Used only to ceiling the AMD estimate.  When
+            # `Ap` is unavailable, pass `nk*nk` so the ceiling is inert.
+            innz = nk * nk
+            if Ap !== nothing && !fully_preallocated
+                cnt = 0
+                for k in k1:(k2-1)
+                    oldcol = Int(Q[k+1])
+                    cnt += Int(Ap[oldcol+2]) - Int(Ap[oldcol+1])
+                end
+                innz = cnt
+            end
+            cap = _block_cap(nk, Sym.Lnz[b], initmem_amd, fully_preallocated, innz)
             resize!(bk.Li, cap); resize!(bk.Lx, cap)
             resize!(bk.Ui, cap); resize!(bk.Ux, cap)
         end
@@ -971,7 +1007,7 @@ function _klu_factor_impl!(Sym::KLUSymbolic{Ti}, Ap::Vector{Ti}, Ai::Vector{Ti},
 
     Num = reuse.n == Sym.n ?
         _prepare_numeric_for_reuse!(reuse, Sym, common) :
-        _alloc_numeric(Tv, Sym, common)
+        _alloc_numeric(Tv, Sym, common, Ap)
     n = Int(Sym.n)
     nblocks = Int(Sym.nblocks)
     nzoff = Int(Sym.nzoff)
