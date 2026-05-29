@@ -18,7 +18,11 @@ using SparseArrays
 using SparseArrays: SparseMatrixCSC
 using LinearAlgebra
 using MuladdMacro: @muladd  # kept for future opt-in FMA; see src/Kernel.jl
-using PrecompileTools: @setup_workload, @compile_workload
+# Full `using` (not a selective `using PrecompileTools: ...`) so the bare
+# `PrecompileTools` name is in scope: the `@setup_workload`/`@compile_workload`
+# macro expansion in PrecompileTools 1.0.x references it directly, so a
+# selective import breaks loading on the lower compat bound (see Downgrade CI).
+using PrecompileTools
 import SparseArrays: nnz, nonzeros
 import Base: (\), size, getproperty, setproperty!, propertynames, show
 
