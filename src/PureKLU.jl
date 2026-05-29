@@ -317,7 +317,19 @@ function klu(
         check::Bool = true, allowsingular::Bool = false,
         full_factor::Bool = true, use_fma = true,
         fully_preallocated::Union{Bool, Nothing} = nothing,
+        structured::Bool = false,
     ) where {Ti <: KLUITypes, Tv <: KLUGenericTypes}
+    # Opt-in structure specialization.  `structured=true` lets `klu` try a
+    # structure-specialized solver (currently single-spike arrowhead) and
+    # fall back to the general KLU path on any non-match.  The default
+    # (`structured=false`) is unchanged and remains a faithful, byte-identical
+    # KLU port -- the structured solvers are NOT bit-identical to libklu.
+    if structured && full_factor
+        common = KLUCommon{Ti}()
+        common.use_fma = _as_val(use_fma)
+        Karrow = _try_arrowhead(Int(n), colptr, rowval, nzval, common)
+        Karrow === nothing || return Karrow
+    end
     K = KLUFactorization(n, colptr, rowval, nzval)
     K.common.use_fma = _as_val(use_fma)
     if fully_preallocated isa Bool
@@ -333,12 +345,13 @@ function klu(
         A::SparseMatrixCSC{Tv, Ti}; check::Bool = true,
         allowsingular::Bool = false, full_factor::Bool = true,
         use_fma = true, fully_preallocated::Union{Bool, Nothing} = nothing,
+        structured::Bool = false,
     ) where {Tv <: KLUGenericTypes, Ti <: KLUITypes}
     n = size(A, 1)
     n == size(A, 2) || throw(DimensionMismatch())
     return klu(
         n, decrement(A.colptr), decrement(A.rowval), A.nzval;
-        check, allowsingular, full_factor, use_fma, fully_preallocated
+        check, allowsingular, full_factor, use_fma, fully_preallocated, structured
     )
 end
 
@@ -635,6 +648,11 @@ function show(io::IO, mime::MIME{Symbol("text/plain")}, K::AbstractKLUFactorizat
         println(io, "Incomplete Factorization, please try `klu_factor!(K)`.")
     end
 end
+
+# Opt-in structure-specialized solvers (arrowhead / bordered).  Included
+# after the core types (`AbstractKLUFactorization`, `KLUCommon`,
+# `AdjointFact`/`TransposeFact`) and `solve!` generics are defined above.
+include("Arrowhead.jl")
 
 # Precompile the four BLAS eltypes (Float64, Float32, ComplexF64, ComplexF32)
 # crossed with the standard index types (Int32, Int64). Generic Real / Complex
