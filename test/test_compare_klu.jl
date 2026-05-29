@@ -45,7 +45,7 @@ where the baseline emits `fmsub`).
 """
 function compare_strict(A::SparseMatrixCSC{Float64})
     K_ref = SUITESPARSE.klu(A)
-    K_pj = PureKLU.klu(A; use_fma = USE_FMA)
+    K_pj = PureKLU.klu(A; use_fma = USE_FMA, detect_banded = false)
 
     @test K_ref.nblocks == K_pj.nblocks
     @test K_ref.lnz == K_pj.lnz
@@ -84,7 +84,7 @@ still require:
 """
 function compare_loose(A::SparseMatrixCSC{Float64})
     K_ref = SUITESPARSE.klu(A)
-    K_pj = PureKLU.klu(A; use_fma = USE_FMA)
+    K_pj = PureKLU.klu(A; use_fma = USE_FMA, detect_banded = false)
 
     @test K_ref.nblocks == K_pj.nblocks
     @test K_ref.R == K_pj.R
@@ -141,7 +141,7 @@ end
     A = sparse(Ap, Ai, Ax1)
     B = sparse(Ap, Ai, Ax2)
     K_ref = SUITESPARSE.klu(A); SUITESPARSE.klu!(K_ref, B)
-    K_pj = PureKLU.klu(A; use_fma = USE_FMA); PureKLU.klu!(K_pj, B)
+    K_pj = PureKLU.klu(A; use_fma = USE_FMA, detect_banded = false); PureKLU.klu!(K_pj, B)
     @test K_ref.L == K_pj.L
     @test K_ref.U == K_pj.U
     @test K_ref.F == K_pj.F
@@ -201,7 +201,7 @@ end
         ]
     )
     K_ref = SUITESPARSE.klu(A)
-    K_pj = PureKLU.klu(A; use_fma = false)
+    K_pj = PureKLU.klu(A; use_fma = false, detect_banded = false)
     @test K_ref.p == K_pj.p
     @test K_ref.q == K_pj.q
     @test K_ref.R == K_pj.R
@@ -263,7 +263,7 @@ end
         Ai = sprand(rng, n, n, 0.15)
         A = Ar + im * Ai + n * I
         K_ref = SUITESPARSE.klu(A)
-        K_pj = PureKLU.klu(A; use_fma = false)
+        K_pj = PureKLU.klu(A; use_fma = false, detect_banded = false)
         @test K_ref.p == K_pj.p
         @test K_ref.q == K_pj.q
         @test K_ref.R == K_pj.R
