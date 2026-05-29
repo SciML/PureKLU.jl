@@ -116,13 +116,17 @@ mutable struct KernelWorkspace{Tv, Ti}
     firstrow_ref::Base.RefValue{Int}
 end
 
+# `X` is fully re-zeroed at the top of every `klu_kernel!` call
+# (`X_w[k] = zero(Tv)` for `k in 1:n`), so it does not need its initial
+# allocation zeroed -- `undef` saves the redundant zero-fill on the cold
+# (allocation) path.  Solve/refactor use `Num.Xwork`, not this buffer.
 KernelWorkspace{Tv, Ti}(n::Integer) where {Tv, Ti} = KernelWorkspace{Tv, Ti}(
     Vector{Ti}(undef, n),
     Vector{Ti}(undef, n),
     Vector{Ti}(undef, n),
     Vector{Ti}(undef, n),
     Vector{Ti}(undef, n),
-    zeros(Tv, n),
+    Vector{Tv}(undef, n),
     Ref(0),
 )
 
@@ -267,13 +271,20 @@ function _alloc_numeric(
     @inbounds for b in 1:nblocks
         k1 = Int(Sym.R[b]); k2 = Int(Sym.R[b + 1])
         nk = k2 - k1
-        bk = KLUNumericBlock{Tv, Ti}()
+        # Size the L/U buffers directly at construction rather than building
+        # empty `Ti[]`/`Tv[]` arrays and `resize!`-ing them: the empty-then-grow
+        # form costs two heap allocations per buffer (the empty array, then the
+        # reallocated backing store), so 8 allocations per multi-column block.
+        # `Vector{T}(undef, cap)` is a single allocation each.
         if nk > 1
             cap = _block_cap(nk, Sym.Lnz[b], initmem_amd, fully_preallocated)
-            resize!(bk.Li, cap); resize!(bk.Lx, cap)
-            resize!(bk.Ui, cap); resize!(bk.Ux, cap)
+            LUbx[b] = KLUNumericBlock{Tv, Ti}(
+                Vector{Ti}(undef, cap), Vector{Tv}(undef, cap), 0,
+                Vector{Ti}(undef, cap), Vector{Tv}(undef, cap), 0,
+            )
+        else
+            LUbx[b] = KLUNumericBlock{Tv, Ti}()
         end
-        LUbx[b] = bk
     end
     Num = KLUNumeric{Tv, Ti, Tr}(
         Sym.n, Sym.nblocks, Ti(0), Ti(0), Ti(1), Ti(1),
