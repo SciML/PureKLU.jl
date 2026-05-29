@@ -74,17 +74,24 @@ function _allocate_symbolic(
         return nothing
     end
     nz = Ap[n + 1]
+    # Column-pointer monotonicity. Once this passes, `Ap` is non-decreasing,
+    # so the row indices read below cover exactly Ai[1:nz] (Ap[1]==0), the
+    # same access set the per-column loop would visit.
     @inbounds for j in 1:n
         if Ap[j] > Ap[j + 1]
             common.status = KLU_INVALID
             return nothing
         end
-        for p in (Ap[j] + 1):Ap[j + 1]
-            i = Ai[p]
-            if i < 0 || i >= n
-                common.status = KLU_INVALID
-                return nothing
-            end
+    end
+    # Row-index bounds as a single flat vectorizable scan. `unsigned(i) >= un`
+    # is bit-exact equivalent to `i < 0 || i >= n` (negative i wraps to a huge
+    # unsigned), collapsing the two-branch range test into one comparison the
+    # compiler can SIMD.
+    un = unsigned(n)
+    @inbounds for p in 1:nz
+        if unsigned(Ai[p]) >= un
+            common.status = KLU_INVALID
+            return nothing
         end
     end
 
@@ -115,13 +122,22 @@ function _order_and_analyze(
     Pbtf = Vector{Ti}(undef, n)
     Qbtf = Vector{Ti}(undef, n)
 
+    # One scratch buffer serves two disjoint phases.  BTF.order! consumes its
+    # first 5n entries; after it returns that storage is dead, so the per-block
+    # worker reuses the buffer for its own Pinv (n) / Cp (maxblock+1 ≤ n+1) /
+    # Ci (nz+1) scratch via views.  Sizing it to cover both uses (5n for BTF,
+    # 2n+nz+2 for the worker since maxblock ≤ n) replaces the worker's three
+    # separate allocations with zero, matching C's single preallocated Common
+    # workspace.
+    nz = Int(Sym.nz)
+    Work = Vector{Ti}(undef, max(5n, 2n + nz + 2))
+
     common.work = 0.0
     do_btf = common.btf != 0
     Sym.do_btf = do_btf ? Ti(1) : Ti(0)
     Sym.ordering = Ti(common.ordering)
 
     if do_btf
-        Work = Vector{Ti}(undef, 5n)
         nblocks, nmatch, work = BTF.order!(
             Int(n), Ap, Ai, common.maxwork,
             Pbtf, Qbtf, Sym.R, Work
@@ -152,7 +168,7 @@ function _order_and_analyze(
         Sym.maxblock = Ti(n)
     end
 
-    _analyze_worker!(Sym, Int(n), Ap, Ai, Pbtf, Qbtf, Int(common.ordering), common)
+    _analyze_worker!(Sym, Int(n), Ap, Ai, Pbtf, Qbtf, Int(common.ordering), common, Work)
     return Sym
 end
 
@@ -268,14 +284,23 @@ function _analyze_worker!(
         Sym::KLUSymbolic{Ti}, n::Int,
         Ap::Vector{Ti}, Ai::Vector{Ti},
         Pbtf::Vector{Ti}, Qbtf::Vector{Ti},
-        ordering::Int, common::KLUCommon{Ti}
+        ordering::Int, common::KLUCommon{Ti},
+        Work::Vector{Ti}
     ) where {Ti}
     P = Sym.P; Q = Sym.Q; R = Sym.R; Lnz = Sym.Lnz
     nblocks = Int(Sym.nblocks)
+    maxblock = Int(Sym.maxblock)
 
-    Pinv = Vector{Ti}(undef, n)
+    # Pinv (n), Cp (maxblock+1) and Ci (nz+1) are carved from the dead BTF
+    # scratch.  Work was sized to hold all three disjoint slices (the caller
+    # guarantees length ≥ 2n+nz+2 ≥ n+(maxblock+1)+(nz+1)), and BTF's use of
+    # the buffer is fully complete before the worker runs, so this is safe.
+    nz = Int(Sym.nz)
+    Pinv = view(Work, 1:n)
+    Cp = view(Work, (n + 1):(n + maxblock + 1))
+    Ci = view(Work, (n + maxblock + 2):(n + maxblock + nz + 2))
     @inbounds for k in 1:n
-        Pinv[Pbtf[k] + 1] = Ti(k - 1)
+        Pinv[Int(Pbtf[k]) + 1] = Ti(k - 1)
     end
 
     nzoff = 0
@@ -284,12 +309,9 @@ function _analyze_worker!(
     maxnz = 0
     Sym.symmetry = EMPTY_FLOAT
 
-    maxblock = Int(Sym.maxblock)
     Pblk = Vector{Ti}(undef, maxblock)
-    Cp = Vector{Ti}(undef, maxblock + 1)
-    Ci = Vector{Ti}(undef, Sym.nz + 1)
 
-    for block in 0:(nblocks - 1)
+    @inbounds for block in 0:(nblocks - 1)
         k1 = Int(R[block + 1])
         k2 = Int(R[block + 2])
         nk = k2 - k1
@@ -298,12 +320,11 @@ function _analyze_worker!(
         Lnz[block + 1] = EMPTY_FLOAT
         pc = 0
         for k in k1:(k2 - 1)
-            newcol = k - k1
-            Cp[newcol + 1] = Ti(pc)
+            Cp[k - k1 + 1] = Ti(pc)
             oldcol = Int(Qbtf[k + 1])
             pend = Int(Ap[oldcol + 2])
-            for p in Int(Ap[oldcol + 1]):(pend - 1)
-                newrow = Int(Pinv[Int(Ai[p + 1]) + 1])
+            for p in (Int(Ap[oldcol + 1]) + 1):pend
+                newrow = Int(Pinv[Int(Ai[p]) + 1])
                 if newrow < k1
                     nzoff += 1
                 else
@@ -320,17 +341,17 @@ function _analyze_worker!(
         flops1 = 0.0
         ok = true
         if nk <= 3
-            @inbounds for k in 1:nk
+            for k in 1:nk
                 Pblk[k] = Ti(k - 1)
             end
             lnz1 = nk * (nk + 1) / 2
             flops1 = nk * (nk - 1) / 2 + (nk - 1) * nk * (2nk - 1) / 6
         elseif ordering == 0
             # AMD - fallback to natural for now
-            ok, lnz1, flops1 = _amd_or_natural!(view(Pblk, 1:nk), nk, Cp, Ci, common)
+            ok, lnz1, flops1 = _amd_or_natural!(Pblk, nk, Cp, Ci, common)
         elseif ordering == 1
             # COLAMD - fallback to natural for now
-            @inbounds for k in 1:nk
+            for k in 1:nk
                 Pblk[k] = Ti(k - 1)
             end
             lnz1 = EMPTY_FLOAT
@@ -350,10 +371,9 @@ function _analyze_worker!(
 
         # combine Pblk with BTF P,Q
         for k in 0:(nk - 1)
-            Q[k + k1 + 1] = Qbtf[Int(Pblk[k + 1]) + k1 + 1]
-        end
-        for k in 0:(nk - 1)
-            P[k + k1 + 1] = Pbtf[Int(Pblk[k + 1]) + k1 + 1]
+            pk = Int(Pblk[k + 1]) + k1 + 1
+            Q[k + k1 + 1] = Qbtf[pk]
+            P[k + k1 + 1] = Pbtf[pk]
         end
     end
 
@@ -365,29 +385,22 @@ function _analyze_worker!(
     return Sym
 end
 
-# AMD ordering for blocks larger than 3. We slice the block's CSC pattern
-# into fresh Ap/Ai vectors (size nk+1 / pc) and call amd_order!; the returned
-# permutation is then stored in `Pblk`.
+# AMD ordering for blocks larger than 3. The block's CSC pattern already
+# lives contiguously in `Cp[1:nk+1]` / `Ci[1:pc]`, and `amd_order!` only ever
+# reads its `Ap`/`Ai` (the matrix is never mutated), so we pass views directly
+# rather than copying into fresh `Ap_blk`/`Ai_blk`. The permutation is written
+# into the first `nk` entries of `Pblk` (which `amd_order!` is the sole writer
+# of), eliminating a third scratch vector + copy.
 function _amd_or_natural!(
-        Pblk, nk::Int, Cp::AbstractVector{Ti}, Ci::AbstractVector{Ti},
+        Pblk::Vector{Ti}, nk::Int, Cp::AbstractVector{Ti}, Ci::AbstractVector{Ti},
         common::KLUCommon{Ti}
     ) where {Ti}
-    Ap_blk = Vector{Ti}(undef, nk + 1)
-    @inbounds for k in 1:(nk + 1)
-        Ap_blk[k] = Cp[k]
-    end
     pc = Int(Cp[nk + 1])
-    Ai_blk = Vector{Ti}(undef, max(pc, 1))
-    @inbounds for p in 1:pc
-        Ai_blk[p] = Ci[p]
-    end
-    P = Vector{Ti}(undef, nk)
-    status, lnz1 = AMD.amd_order!(nk, Ap_blk, Ai_blk, P)
+    Ap_blk = view(Cp, 1:(nk + 1))
+    Ai_blk = view(Ci, 1:max(pc, 1))
+    status, lnz1 = AMD.amd_order!(nk, Ap_blk, Ai_blk, Pblk)
     if status < 0
         return false, 0.0, 0.0
-    end
-    @inbounds for k in 1:nk
-        Pblk[k] = P[k]
     end
     # `lnz1` is AMD's exact off-diagonal L fill count (SuiteSparse Info[AMD_LNZ]);
     # `_block_cap` adds the `nk` diagonal entries.  The flop count is left as the

@@ -701,9 +701,18 @@ function amd_postorder!(
     end
 
     k = 0
-    for i in 0:(nn - 1)
+    @inbounds for i in 0:(nn - 1)
         if Parent[i + 1] == Ti(EMPTY) && Nv[i + 1] > 0
-            k = amd_post_tree!(i, k, Child, Sibling, Order, Stack)
+            # A childless root is its own (single-node) postorder: assigning
+            # Order[i]=k inline is byte-identical to amd_post_tree!(i,...) for
+            # that case and skips the call.  Matrices like the arrow head leave
+            # hundreds of childless roots, so this elides hundreds of calls.
+            if Child[i + 1] == Ti(EMPTY)
+                Order[i + 1] = Ti(k)
+                k += 1
+            else
+                k = amd_post_tree!(i, k, Child, Sibling, Order, Stack)
+            end
         end
     end
     return nothing

@@ -116,13 +116,20 @@ mutable struct KernelWorkspace{Tv, Ti}
     firstrow_ref::Base.RefValue{Int}
 end
 
+# `X` is fully re-zeroed at the top of every `klu_kernel!` call
+# (`X_w[k] = zero(Tv)` for `k in 1:n`), so it does not need its initial
+# allocation zeroed -- `undef` saves the redundant zero-fill on the cold
+# (allocation) path.  This length-`n` convenience constructor is used only for
+# the empty placeholder workspace; `_alloc_numeric` instead builds the
+# workspace with `X` aliasing `Num.Xwork` (the solve/refactor scratch buffer),
+# since the kernel accumulator and the solve buffer never alias in time.
 KernelWorkspace{Tv, Ti}(n::Integer) where {Tv, Ti} = KernelWorkspace{Tv, Ti}(
     Vector{Ti}(undef, n),
     Vector{Ti}(undef, n),
     Vector{Ti}(undef, n),
     Vector{Ti}(undef, n),
     Vector{Ti}(undef, n),
-    zeros(Tv, n),
+    Vector{Tv}(undef, n),
     Ref(0),
 )
 
@@ -264,16 +271,41 @@ function _alloc_numeric(
     Tr = _real_eltype(Tv)
     initmem_amd = common.initmem_amd
     LUbx = Vector{KLUNumericBlock{Tv, Ti}}(undef, nblocks)
+    # The kernel's per-block accumulator (`wk.X`) and the solve-time RHS
+    # buffer (`Num.Xwork`) never alias in time: the kernel re-zeros its
+    # accumulator at the top of every block and factor runs to completion
+    # before any solve, which fully re-fills `Xwork` before its first read.
+    # So a single length-`n` Vector (`n >= maxblock`) serves both, saving the
+    # separate length-`maxblock` `wk.X` allocation on the cold factor.  This is
+    # an ordinary owning Vector shared between two fields -- never resized, no
+    # `unsafe_wrap`.
+    Xwork = Vector{Tv}(undef, n)
+    wk = KernelWorkspace{Tv, Ti}(
+        Vector{Ti}(undef, maxblock),
+        Vector{Ti}(undef, maxblock),
+        Vector{Ti}(undef, maxblock),
+        Vector{Ti}(undef, maxblock),
+        Vector{Ti}(undef, maxblock),
+        Xwork,
+        Ref(0),
+    )
     @inbounds for b in 1:nblocks
         k1 = Int(Sym.R[b]); k2 = Int(Sym.R[b + 1])
         nk = k2 - k1
-        bk = KLUNumericBlock{Tv, Ti}()
+        # Size the L/U buffers directly at construction rather than building
+        # empty `Ti[]`/`Tv[]` arrays and `resize!`-ing them: the empty-then-grow
+        # form costs two heap allocations per buffer (the empty array, then the
+        # reallocated backing store), so 8 allocations per multi-column block.
+        # `Vector{T}(undef, cap)` is a single allocation each.
         if nk > 1
             cap = _block_cap(nk, Sym.Lnz[b], initmem_amd, fully_preallocated)
-            resize!(bk.Li, cap); resize!(bk.Lx, cap)
-            resize!(bk.Ui, cap); resize!(bk.Ux, cap)
+            LUbx[b] = KLUNumericBlock{Tv, Ti}(
+                Vector{Ti}(undef, cap), Vector{Tv}(undef, cap), 0,
+                Vector{Ti}(undef, cap), Vector{Tv}(undef, cap), 0,
+            )
+        else
+            LUbx[b] = KLUNumericBlock{Tv, Ti}()
         end
-        LUbx[b] = bk
     end
     Num = KLUNumeric{Tv, Ti, Tr}(
         Sym.n, Sym.nblocks, Ti(0), Ti(0), Ti(1), Ti(1),
@@ -285,14 +317,26 @@ function _alloc_numeric(
         Vector{Ti}(undef, n),
         LUbx,
         Vector{Tv}(undef, n),
-        scale > 0 ? zeros(Tr, n) : Tr[],
-        zeros(Ti, n + 1),
+        # `Rs` is allocated only when `scale > 0`, and in that case `klu_scale!`
+        # unconditionally re-zeros all of `Rs[1..n]` (`Rs[row] = z`) before its
+        # row-norm accumulation, on every factor.  So the cold-path zero-fill is
+        # redundant -- `undef` elides the memset; the buffer is fully written by
+        # `klu_scale!` before any read.
+        scale > 0 ? Vector{Tr}(undef, n) : Tr[],
+        # `Offp` is chain-written start-to-end on the factor proper:
+        # `Offp[1] = 0`, then every column writes `Offp[col+2]` (the nk==1
+        # branch and `_kernel_construct_column!`), and each read of
+        # `Offp[col+1]` is of the previous column's already-written end.  Since
+        # the blocks partition all `n` columns, `Offp[1..n+1]` are all set
+        # before being read on a successful factor, so the initial zero-fill is
+        # redundant -- `undef` elides the cold-path memset.
+        Vector{Ti}(undef, n + 1),
         Vector{Ti}(undef, max(nzoff, 0)),
         Vector{Tv}(undef, max(nzoff, 0)),
         Sym.nzoff,
-        Vector{Tv}(undef, n),
+        Xwork,
         scale > 0 ? Vector{Tr}(undef, n) : Tr[],
-        KernelWorkspace{Tv, Ti}(maxblock),
+        wk,
         Vector{Ti}(undef, maxblock),
     )
     return Num
@@ -413,6 +457,47 @@ function _validate_pattern!(
     return true
 end
 
+# Per-column nonzero walk for `klu_scale!`, specialised on the scale mode
+# `Smode` (0 = validate only, 1 = 1-norm, 2 = ∞-norm).  Returns `false` on a
+# detected invalid pattern (out-of-range row or duplicate).  `Rs[row]` is only
+# touched for `Smode >= 1`, where it has already been zeroed by the caller; the
+# ∞-norm path uses C's `if (a > Rs[row]) Rs[row] = a` conditional store rather
+# than `max`, which is bit-identical to SuiteSparse `klu_scale.c` (verified) and
+# avoids the NaN-canonicalisation `max` would otherwise emit.
+function _klu_scale_walk!(
+        ::Val{Smode}, W::Union{Vector{Ti}, Nothing}, n::Int,
+        Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
+        Rs, fma_val::Val, common::KLUCommon{Ti}
+    ) where {Smode, Tv, Ti}
+    check_duplicates = W !== nothing
+    @inbounds for col in 1:n
+        pend = Int(Ap[col + 1])
+        for p in (Int(Ap[col]) + 1):pend
+            row = Int(Ai[p]) + 1
+            if row < 1 || row > n
+                common.status = KLU_INVALID
+                return false
+            end
+            if check_duplicates
+                if W[row] == Ti(col - 1)
+                    common.status = KLU_INVALID
+                    return false
+                end
+                W[row] = Ti(col - 1)
+            end
+            if Smode == 1
+                Rs[row] += _ssabs(Ax[p], fma_val)
+            elseif Smode == 2
+                a = _ssabs(Ax[p], fma_val)
+                if a > Rs[row]
+                    Rs[row] = a
+                end
+            end
+        end
+    end
+    return true
+end
+
 """
     klu_scale!(scale, n, Ap, Ai, Ax, Rs, W, common) -> Bool
 
@@ -434,6 +519,7 @@ function klu_scale!(
         common.status = KLU_INVALID
         return false
     end
+    n = Int(n)
     @inbounds if Ap[1] != 0 || Ap[n + 1] < 0
         common.status = KLU_INVALID
         return false
@@ -451,39 +537,29 @@ function klu_scale!(
             Rs[row] = z
         end
     end
-    check_duplicates = W !== nothing
-    if check_duplicates
+    if W !== nothing
         @inbounds for row in 1:n
             W[row] = Ti(EMPTY)
         end
     end
-    # `row` is range-validated (1..n) before any `Rs[row]`/`W[row]` access, and
-    # `p` is bounded by the validated `Ap` cursor, so the array indexing here is
-    # provably in-bounds -- mirror the C reference, which does the same explicit
-    # data check and elides the redundant array-bound checks.
-    @inbounds for col in 1:n
-        pend = Int(Ap[col + 1])
-        for p in (Int(Ap[col]) + 1):pend
-            row = Int(Ai[p]) + 1
-            if row < 1 || row > n
-                common.status = KLU_INVALID
-                return false
-            end
-            if check_duplicates
-                if W[row] == Ti(col - 1)
-                    common.status = KLU_INVALID
-                    return false
-                end
-                W[row] = Ti(col - 1)
-            end
-            if scale > 0
-                a = _ssabs(Ax[p], fma_val)
-                if scale == 1
-                    Rs[row] += a
-                else
-                    Rs[row] = max(Rs[row], a)
-                end
-            end
+    # Function-barrier on a compile-time `scale` mode (`Val{1}`/`Val{2}`/`Val{0}`)
+    # so the per-nonzero column walk specialises away the runtime
+    # `scale==1`/`scale>0` branches (mirroring the `_klu_refactor_impl!`
+    # `scale_val` barrier above).  Crucially the barrier is a non-inlined
+    # function so the union-typed `fma_val = common.use_fma` is union-split into
+    # two concrete specialisations at the call boundary rather than smeared
+    # across the three inlined scale branches.
+    if scale == 1
+        if !_klu_scale_walk!(Val(1), W, n, Ap, Ai, Ax, Rs, fma_val, common)
+            return false
+        end
+    elseif scale >= 2
+        if !_klu_scale_walk!(Val(2), W, n, Ap, Ai, Ax, Rs, fma_val, common)
+            return false
+        end
+    else
+        if !_klu_scale_walk!(Val(0), W, n, Ap, Ai, Ax, Rs, fma_val, common)
+            return false
         end
     end
     if scale > 0
@@ -680,7 +756,13 @@ end
 # When `fma_val == Val(true)` (default) we use `muladd`, which LLVM
 # lowers to `vfnmadd*sd` on hardware with FMA -- one rounding, slightly
 # more accurate, but L/U entries can differ from KLU.jl by 1 ULP.
-function _kernel_lsolve_numeric!(
+#
+# `@inline`: the other five per-column kernel helpers are already inlined
+# into `klu_kernel!`; this one was the lone remaining `invoke`. Inlining
+# removes the call-boundary marshaling that, for very-sparse columns
+# (e.g. arrow's 499 `top == n` columns where this loop is empty), is pure
+# overhead paid once per column.
+@inline function _kernel_lsolve_numeric!(
         Pinv::Vector{Ti},
         block_Li::Vector{Ti}, block_Lx::Vector{Tv},
         Stack::Vector{Ti}, Lip::Vector{Ti},
@@ -939,12 +1021,67 @@ function klu_kernel!(
             Rs, scale_val,
             Offp, Offi, Offx
         )
+
+        @inbounds diagrow = Int(Pblock[k + 1])
+
+        # Fast path for "trivial" columns where `top == n`: the symbolic
+        # solve found no already-pivoted reachable row, so this column
+        # has NO U off-diagonal entries and lsolve_numeric / prune are
+        # provably empty.  We can skip the empty lsolve_numeric scatter,
+        # the U-build loop (and its capacity check), and prune entirely,
+        # and set Uip/Ulen directly.  Everything else (lpivot, Udiag,
+        # pivot bookkeeping) is identical to the general branch, so the
+        # produced L/U/Pinv/Udiag are byte-for-byte the same.
+        if top == n
+            ok, pivrow, pivot, _ = _kernel_lpivot!(
+                diagrow, k, n, tol, X_w,
+                Li, Lx, Lip, Llen,
+                Pinv_w, firstrow_ref, common,
+                k1, fma_val
+            )
+            if !ok
+                common.status = KLU_SINGULAR
+                if common.numerical_rank == Ti(EMPTY)
+                    common.numerical_rank = Ti(kg)
+                    @inbounds common.singular_col = Q[kg + 1]
+                end
+                if common.halt_if_singular != 0
+                    block.Li_used = li_used
+                    block.Ui_used = ui_used
+                    return lnz, unz
+                end
+            end
+
+            @inbounds lip_k = Int(Lip[kg + 1])
+            @inbounds llen_k = Int(Llen[kg + 1])
+            li_used = lip_k + llen_k
+
+            @inbounds Uip[kg + 1] = Ti(ui_used)
+            @inbounds Ulen[kg + 1] = Ti(0)
+
+            @inbounds Udiag[kg + 1] = pivot
+
+            if pivrow != diagrow
+                common.noffdiag += Ti(1)
+                if Pinv_w[diagrow + 1] < 0
+                    kbar = _kflip(Int(Pinv_w[pivrow + 1]))
+                    Pblock[kbar + 1] = Ti(diagrow)
+                    Pinv_w[diagrow + 1] = Ti(_kflip(kbar))
+                end
+            end
+            Pblock[k + 1] = Ti(pivrow)
+            Pinv_w[pivrow + 1] = Ti(k)
+
+            lnz += llen_k + 1
+            unz += 1
+            continue
+        end
+
         _kernel_lsolve_numeric!(
             Pinv_w, Li, Lx, Stack_w, Lip,
             top, n, Llen, X_w, k1, fma_val
         )
 
-        @inbounds diagrow = Int(Pblock[k + 1])
         ok, pivrow, pivot, _ = _kernel_lpivot!(
             diagrow, k, n, tol, X_w,
             Li, Lx, Lip, Llen,
