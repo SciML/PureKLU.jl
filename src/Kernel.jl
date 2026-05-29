@@ -680,7 +680,13 @@ end
 # When `fma_val == Val(true)` (default) we use `muladd`, which LLVM
 # lowers to `vfnmadd*sd` on hardware with FMA -- one rounding, slightly
 # more accurate, but L/U entries can differ from KLU.jl by 1 ULP.
-function _kernel_lsolve_numeric!(
+#
+# `@inline`: the other five per-column kernel helpers are already inlined
+# into `klu_kernel!`; this one was the lone remaining `invoke`. Inlining
+# removes the call-boundary marshaling that, for very-sparse columns
+# (e.g. arrow's 499 `top == n` columns where this loop is empty), is pure
+# overhead paid once per column.
+@inline function _kernel_lsolve_numeric!(
         Pinv::Vector{Ti},
         block_Li::Vector{Ti}, block_Lx::Vector{Tv},
         Stack::Vector{Ti}, Lip::Vector{Ti},
