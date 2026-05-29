@@ -1,4 +1,4 @@
-name: "Documentation"
+name: Documentation
 
 on:
   push:
@@ -11,13 +11,28 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_name != github.event.repository.default_branch || github.ref != 'refs/tags/v*' }}
 
+# Self-contained build/deploy rather than SciML's reusable documentation.yml@v1:
+# that workflow's Codecov step (hardcoded `fail_ci_if_error: true`) fails until
+# the repo is onboarded to Codecov, and its `coverage: false` opt-out is broken
+# upstream (the command template expands to a literal `false` argument). This
+# builds the docs and lets `deploydocs` deploy on main/tags (and skip on PRs).
 jobs:
-  build-and-deploy-docs:
-    name: "Documentation"
-    uses: "SciML/.github/.github/workflows/documentation.yml@v1"
-    secrets: "inherit"
-    with:
-      # Skip Codecov upload: the docs build itself succeeds, but the reusable
-      # workflow hardcodes `fail_ci_if_error: true`, so the upload fails the job
-      # until PureKLU.jl is onboarded to Codecov. Re-enable once it is.
-      coverage: false
+  build:
+    name: Documentation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      statuses: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v2
+      - name: Install dependencies
+        run: julia --project=docs/ -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+      - name: Build and deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
+        run: julia --project=docs/ docs/make.jl
