@@ -49,14 +49,18 @@ function _klu_solve_impl!(
     # we don't need to clear it.
     X = Num.Xwork
     for col in 1:nrhs
-        # X = P * (R \ B[:, col]) -- gather permuted+scaled RHS
+        # X = P * (R \ B[:, col]) -- gather permuted+scaled RHS.
+        # Gather and scale are split into two passes: fusing the `/ Rs[k]`
+        # into the permuted gather forces a scalar divide per element (the
+        # `Pnum`-indexed load defeats vectorisation), whereas the contiguous
+        # second pass lets the divide vectorise.  IEEE division is the same
+        # either way, so `X[k] = B[Pnum[k]] / Rs[k]` stays bit-for-bit exact.
+        @inbounds for k in 0:(n - 1)
+            X[k + 1] = B[Int(Pnum[k + 1]) + 1, col]
+        end
         if scaled
-            @inbounds for k in 0:(n - 1)
-                X[k + 1] = B[Int(Pnum[k + 1]) + 1, col] / Rs[k + 1]
-            end
-        else
-            @inbounds for k in 0:(n - 1)
-                X[k + 1] = B[Int(Pnum[k + 1]) + 1, col]
+            @inbounds @simd for k in 1:n
+                X[k] = X[k] / Rs[k]
             end
         end
 
@@ -236,8 +240,15 @@ function _klu_tsolve_impl!(
         end
 
         if scaled
+            # Split scale from the permuted scatter (see `_klu_solve_impl!`):
+            # the contiguous in-place divide vectorises, while fusing it into
+            # the `Pnum`-indexed store forces a scalar divide per element.
+            # `X[k] / Rs[k]` is bit-for-bit identical either way.
+            @inbounds @simd for k in 1:n
+                X[k] = X[k] / Rs[k]
+            end
             @inbounds for k in 0:(n - 1)
-                B[Int(Pnum[k + 1]) + 1, col] = X[k + 1] / Rs[k + 1]
+                B[Int(Pnum[k + 1]) + 1, col] = X[k + 1]
             end
         else
             @inbounds for k in 0:(n - 1)

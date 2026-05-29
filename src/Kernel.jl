@@ -798,12 +798,12 @@ end
     ) where {Tv, Ti}
     Tr = _real_eltype(Tv)
     kglobal = k + k1
-    if Llen[kglobal + 1] == 0
+    if (@inbounds Llen[kglobal + 1]) == 0
         if common.halt_if_singular != 0
             return false, -1, zero(Tv), zero(Tr)
         end
         for firstrow in firstrow_ref[]:(n - 1)
-            if Pinv[firstrow + 1] < 0
+            if (@inbounds Pinv[firstrow + 1]) < 0
                 firstrow_ref[] = firstrow
                 # Clear X at any non-pivotal row (matches C's behavior to leave X zero)
                 return false, firstrow, zero(Tv), zero(Tr)
@@ -836,7 +836,7 @@ end
         end
     end
 
-    xabs_last = abs(X[last_row_index + 1])
+    @inbounds xabs_last = abs(X[last_row_index + 1])
     if xabs_last > abs_pivot
         abs_pivot = xabs_last
         ppivrow = -1
@@ -848,7 +848,7 @@ end
             ppivrow = -1
         end
     elseif pdiag != -1
-        xabs_d = abs(block_Lx[lip + pdiag + 1])
+        @inbounds xabs_d = abs(block_Lx[lip + pdiag + 1])
         if xabs_d >= tol * abs_pivot
             abs_pivot = xabs_d
             ppivrow = pdiag
@@ -857,7 +857,7 @@ end
 
     pivrow = 0
     pivot = zero(Tv)
-    if ppivrow != -1
+    @inbounds if ppivrow != -1
         pivrow = Int(block_Li[lip + ppivrow + 1])
         pivot = block_Lx[lip + ppivrow + 1]
         block_Li[lip + ppivrow + 1] = Ti(last_row_index)
@@ -866,7 +866,7 @@ end
         pivrow = last_row_index
         pivot = X[last_row_index + 1]
     end
-    X[last_row_index + 1] = zero(Tv)
+    @inbounds X[last_row_index + 1] = zero(Tv)
 
     if iszero(pivot) && common.halt_if_singular != 0
         return false, pivrow, pivot, abs_pivot
@@ -1061,7 +1061,7 @@ function klu_kernel!(
 
             @inbounds Udiag[kg + 1] = pivot
 
-            if pivrow != diagrow
+            @inbounds if pivrow != diagrow
                 common.noffdiag += Ti(1)
                 if Pinv_w[diagrow + 1] < 0
                     kbar = _kflip(Int(Pinv_w[pivrow + 1]))
@@ -1069,8 +1069,8 @@ function klu_kernel!(
                     Pinv_w[diagrow + 1] = Ti(_kflip(kbar))
                 end
             end
-            Pblock[k + 1] = Ti(pivrow)
-            Pinv_w[pivrow + 1] = Ti(k)
+            @inbounds Pblock[k + 1] = Ti(pivrow)
+            @inbounds Pinv_w[pivrow + 1] = Ti(k)
 
             lnz += llen_k + 1
             unz += 1
@@ -1130,7 +1130,7 @@ function klu_kernel!(
 
         @inbounds Udiag[kg + 1] = pivot
 
-        if pivrow != diagrow
+        @inbounds if pivrow != diagrow
             common.noffdiag += Ti(1)
             if Pinv_w[diagrow + 1] < 0
                 kbar = _kflip(Int(Pinv_w[pivrow + 1]))
@@ -1138,8 +1138,8 @@ function klu_kernel!(
                 Pinv_w[diagrow + 1] = Ti(_kflip(kbar))
             end
         end
-        Pblock[k + 1] = Ti(pivrow)
-        Pinv_w[pivrow + 1] = Ti(k)
+        @inbounds Pblock[k + 1] = Ti(pivrow)
+        @inbounds Pinv_w[pivrow + 1] = Ti(k)
 
         _kernel_prune!(
             Lpend_w, Pinv_w, k, pivrow, Li, Lx,
