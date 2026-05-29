@@ -16,3 +16,8 @@ jobs:
     name: "Documentation"
     uses: "SciML/.github/.github/workflows/documentation.yml@v1"
     secrets: "inherit"
+    with:
+      # Skip Codecov upload: the docs build itself succeeds, but the reusable
+      # workflow hardcodes `fail_ci_if_error: true`, so the upload fails the job
+      # until PureKLU.jl is onboarded to Codecov. Re-enable once it is.
+      coverage: false
