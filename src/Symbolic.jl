@@ -347,8 +347,23 @@ function _analyze_worker!(
             lnz1 = nk * (nk + 1) / 2
             flops1 = nk * (nk - 1) / 2 + (nk - 1) * nk * (2nk - 1) / 6
         elseif ordering == 0
-            # AMD - fallback to natural for now
-            ok, lnz1, flops1 = _amd_or_natural!(Pblk, nk, Cp, Ci, common)
+            # For a block whose nonzero pattern is contained in a narrow band,
+            # the natural ordering already yields band-confined fill that AMD
+            # cannot improve on (any permutation of a within-band-dense block
+            # produces >= band fill). Detecting this cheaply (one O(nnz) pass)
+            # lets us skip the AMD ordering entirely for true banded systems.
+            banded, bw1 = common.detect_banded ? _block_bandwidth(nk, Cp, Ci) : (false, 0)
+            if banded
+                @inbounds for k in 1:nk
+                    Pblk[k] = Ti(k - 1)
+                end
+                # Exact off-diagonal fill of a banded LU under natural order:
+                # column k (0-based) has min(bw, nk-1-k) sub-diagonal L entries.
+                lnz1 = _band_lnz(nk, bw1)
+                flops1 = EMPTY_FLOAT
+            else
+                ok, lnz1, flops1 = _amd_or_natural!(Pblk, nk, Cp, Ci, common)
+            end
         elseif ordering == 1
             # COLAMD - fallback to natural for now
             for k in 1:nk
@@ -383,6 +398,64 @@ function _analyze_worker!(
     Sym.est_flops = flops
     common.status = KLU_OK
     return Sym
+end
+
+# Largest half-bandwidth for which the natural ordering is preferred over AMD.
+# Natural-order banded LU fill is O(nk*bw); keeping `bw` tiny ensures the fill
+# stays at-or-below what AMD produces and that the band detector never fires on
+# matrices (e.g. 2D Laplacians, bw≈sqrt(n)) where the band is sparse and natural
+# order would fill it in. True hardware/PDE band systems have bw of a few units.
+const BAND_BW_MAX = 8
+
+# Scan a block's CSC pattern (`Cp[1:nk+1]` / `Ci`) and return `(banded, bw)`
+# where `bw` is the half-bandwidth max|i-j| over all entries.  Bails out as soon
+# as any entry exceeds `BAND_BW_MAX` (so the common non-banded case costs only a
+# partial scan).  One O(nnz) pass, no allocation.
+#
+# Beyond the narrow-bandwidth test, two guards ensure the natural ordering is
+# chosen only when it is genuinely at-or-better than AMD (otherwise we would
+# diverge from AMD's ordering for no -- or negative -- benefit):
+#   1. size: the band must be narrow *relative to* the block (`nk >= 4(bw+1)`).
+#      Without this an 8x8 dense block reads as bw<=7<=BAND_BW_MAX "banded" and
+#      gets reordered, needlessly diverging from AMD (and from KLU bit-for-bit).
+#   2. density: the band must be (near-)full (`2*nnz >= nk*(2bw+1)`).  A sparse
+#      band -- e.g. a 2D Laplacian with only a few occupied diagonals -- would be
+#      *filled in* by natural-order LU, which AMD avoids; those keep the AMD path.
+#      A genuine PDE/hardware band block fills its band, so this passes for them.
+@inline function _block_bandwidth(nk::Int, Cp::AbstractVector{Ti}, Ci::AbstractVector{Ti}) where {Ti}
+    bw = 0
+    @inbounds for j in 0:(nk - 1)
+        p1 = Int(Cp[j + 1])
+        p2 = Int(Cp[j + 2])
+        for p in p1:(p2 - 1)
+            d = Int(Ci[p + 1]) - j
+            d = ifelse(d < 0, -d, d)
+            if d > BAND_BW_MAX
+                return (false, 0)
+            end
+            bw = ifelse(d > bw, d, bw)
+        end
+    end
+    @inbounds pc = Int(Cp[nk + 1])
+    if nk < 4 * (bw + 1) || 2 * pc < nk * (2 * bw + 1)
+        return (false, 0)
+    end
+    return (true, bw)
+end
+
+# Exact off-diagonal L nonzero count of an `nk`-column banded LU with
+# half-bandwidth `bw` under the natural ordering (no fill outside the band):
+# column k (0-based) contributes min(bw, nk-1-k) sub-diagonal entries.
+@inline function _band_lnz(nk::Int, bw::Int)
+    if nk <= bw + 1
+        # Whole trailing block is within the band: dense lower triangle.
+        return Float64(nk * (nk - 1) ÷ 2)
+    end
+    # Columns 0 .. nk-1-bw each have `bw` sub-diagonals; the last `bw` columns
+    # taper as bw-1, bw-2, ..., 0.
+    full = (nk - bw) * bw
+    taper = bw * (bw - 1) ÷ 2
+    return Float64(full + taper)
 end
 
 # AMD ordering for blocks larger than 3. The block's CSC pattern already

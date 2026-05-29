@@ -317,9 +317,11 @@ function klu(
         check::Bool = true, allowsingular::Bool = false,
         full_factor::Bool = true, use_fma = true,
         fully_preallocated::Union{Bool, Nothing} = nothing,
+        detect_banded::Bool = false,
     ) where {Ti <: KLUITypes, Tv <: KLUGenericTypes}
     K = KLUFactorization(n, colptr, rowval, nzval)
     K.common.use_fma = _as_val(use_fma)
+    K.common.detect_banded = detect_banded
     if fully_preallocated isa Bool
         K.common.fully_preallocated = fully_preallocated
         return full_factor ? klu_factor!(K; check, allowsingular) : klu_analyze!(K; check)
@@ -333,12 +335,13 @@ function klu(
         A::SparseMatrixCSC{Tv, Ti}; check::Bool = true,
         allowsingular::Bool = false, full_factor::Bool = true,
         use_fma = true, fully_preallocated::Union{Bool, Nothing} = nothing,
+        detect_banded::Bool = false,
     ) where {Tv <: KLUGenericTypes, Ti <: KLUITypes}
     n = size(A, 1)
     n == size(A, 2) || throw(DimensionMismatch())
     return klu(
         n, decrement(A.colptr), decrement(A.rowval), A.nzval;
-        check, allowsingular, full_factor, use_fma, fully_preallocated
+        check, allowsingular, full_factor, use_fma, fully_preallocated, detect_banded
     )
 end
 

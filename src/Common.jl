@@ -65,6 +65,13 @@ mutable struct KLUCommon{Ti <: Integer}
     # the direct `klu_factor!(K)` path uses whatever is set here (default
     # `false`).
     fully_preallocated::Bool
+    # Opt-in: when `true`, the analyze phase detects per-BTF-block narrow,
+    # dense bands and orders them naturally (skipping AMD) -- a large analyze
+    # speedup for genuinely banded systems.  Default `false` keeps the AMD
+    # ordering, so the factorization stays bit-for-bit identical to SuiteSparse
+    # KLU (the natural ordering is equally valid and equal-fill, but its `Q`/L/U
+    # differ from AMD's, which would break the strict KLU-parity guarantee).
+    detect_banded::Bool
 end
 
 function KLUCommon{Ti}() where {Ti <: Integer}
@@ -75,6 +82,7 @@ function KLUCommon{Ti}() where {Ti <: Integer}
         Ti(EMPTY), Ti(EMPTY), Ti(EMPTY), Ti(0),
         EMPTY_FLOAT, EMPTY_FLOAT, EMPTY_FLOAT, EMPTY_FLOAT, 0.0,
         Val(true),
+        false,
         false,
     )
     return C
@@ -113,6 +121,7 @@ function klu_defaults!(C::KLUCommon{Ti}) where {Ti}
     C.work = 0.0
     C.use_fma = Val(true)
     C.fully_preallocated = false
+    C.detect_banded = false
     return C
 end
 
