@@ -424,6 +424,47 @@ function _validate_pattern!(
     return true
 end
 
+# Per-column nonzero walk for `klu_scale!`, specialised on the scale mode
+# `Smode` (0 = validate only, 1 = 1-norm, 2 = ∞-norm).  Returns `false` on a
+# detected invalid pattern (out-of-range row or duplicate).  `Rs[row]` is only
+# touched for `Smode >= 1`, where it has already been zeroed by the caller; the
+# ∞-norm path uses C's `if (a > Rs[row]) Rs[row] = a` conditional store rather
+# than `max`, which is bit-identical to SuiteSparse `klu_scale.c` (verified) and
+# avoids the NaN-canonicalisation `max` would otherwise emit.
+function _klu_scale_walk!(
+        ::Val{Smode}, W::Union{Vector{Ti}, Nothing}, n::Int,
+        Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
+        Rs, fma_val::Val, common::KLUCommon{Ti}
+    ) where {Smode, Tv, Ti}
+    check_duplicates = W !== nothing
+    @inbounds for col in 1:n
+        pend = Int(Ap[col + 1])
+        for p in (Int(Ap[col]) + 1):pend
+            row = Int(Ai[p]) + 1
+            if row < 1 || row > n
+                common.status = KLU_INVALID
+                return false
+            end
+            if check_duplicates
+                if W[row] == Ti(col - 1)
+                    common.status = KLU_INVALID
+                    return false
+                end
+                W[row] = Ti(col - 1)
+            end
+            if Smode == 1
+                Rs[row] += _ssabs(Ax[p], fma_val)
+            elseif Smode == 2
+                a = _ssabs(Ax[p], fma_val)
+                if a > Rs[row]
+                    Rs[row] = a
+                end
+            end
+        end
+    end
+    return true
+end
+
 """
     klu_scale!(scale, n, Ap, Ai, Ax, Rs, W, common) -> Bool
 
@@ -445,6 +486,7 @@ function klu_scale!(
         common.status = KLU_INVALID
         return false
     end
+    n = Int(n)
     @inbounds if Ap[1] != 0 || Ap[n + 1] < 0
         common.status = KLU_INVALID
         return false
@@ -462,39 +504,29 @@ function klu_scale!(
             Rs[row] = z
         end
     end
-    check_duplicates = W !== nothing
-    if check_duplicates
+    if W !== nothing
         @inbounds for row in 1:n
             W[row] = Ti(EMPTY)
         end
     end
-    # `row` is range-validated (1..n) before any `Rs[row]`/`W[row]` access, and
-    # `p` is bounded by the validated `Ap` cursor, so the array indexing here is
-    # provably in-bounds -- mirror the C reference, which does the same explicit
-    # data check and elides the redundant array-bound checks.
-    @inbounds for col in 1:n
-        pend = Int(Ap[col + 1])
-        for p in (Int(Ap[col]) + 1):pend
-            row = Int(Ai[p]) + 1
-            if row < 1 || row > n
-                common.status = KLU_INVALID
-                return false
-            end
-            if check_duplicates
-                if W[row] == Ti(col - 1)
-                    common.status = KLU_INVALID
-                    return false
-                end
-                W[row] = Ti(col - 1)
-            end
-            if scale > 0
-                a = _ssabs(Ax[p], fma_val)
-                if scale == 1
-                    Rs[row] += a
-                else
-                    Rs[row] = max(Rs[row], a)
-                end
-            end
+    # Function-barrier on a compile-time `scale` mode (`Val{1}`/`Val{2}`/`Val{0}`)
+    # so the per-nonzero column walk specialises away the runtime
+    # `scale==1`/`scale>0` branches (mirroring the `_klu_refactor_impl!`
+    # `scale_val` barrier above).  Crucially the barrier is a non-inlined
+    # function so the union-typed `fma_val = common.use_fma` is union-split into
+    # two concrete specialisations at the call boundary rather than smeared
+    # across the three inlined scale branches.
+    if scale == 1
+        if !_klu_scale_walk!(Val(1), W, n, Ap, Ai, Ax, Rs, fma_val, common)
+            return false
+        end
+    elseif scale >= 2
+        if !_klu_scale_walk!(Val(2), W, n, Ap, Ai, Ax, Rs, fma_val, common)
+            return false
+        end
+    else
+        if !_klu_scale_walk!(Val(0), W, n, Ap, Ai, Ax, Rs, fma_val, common)
+            return false
         end
     end
     if scale > 0
