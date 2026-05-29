@@ -945,12 +945,67 @@ function klu_kernel!(
             Rs, scale_val,
             Offp, Offi, Offx
         )
+
+        @inbounds diagrow = Int(Pblock[k + 1])
+
+        # Fast path for "trivial" columns where `top == n`: the symbolic
+        # solve found no already-pivoted reachable row, so this column
+        # has NO U off-diagonal entries and lsolve_numeric / prune are
+        # provably empty.  We can skip the empty lsolve_numeric scatter,
+        # the U-build loop (and its capacity check), and prune entirely,
+        # and set Uip/Ulen directly.  Everything else (lpivot, Udiag,
+        # pivot bookkeeping) is identical to the general branch, so the
+        # produced L/U/Pinv/Udiag are byte-for-byte the same.
+        if top == n
+            ok, pivrow, pivot, _ = _kernel_lpivot!(
+                diagrow, k, n, tol, X_w,
+                Li, Lx, Lip, Llen,
+                Pinv_w, firstrow_ref, common,
+                k1, fma_val
+            )
+            if !ok
+                common.status = KLU_SINGULAR
+                if common.numerical_rank == Ti(EMPTY)
+                    common.numerical_rank = Ti(kg)
+                    @inbounds common.singular_col = Q[kg + 1]
+                end
+                if common.halt_if_singular != 0
+                    block.Li_used = li_used
+                    block.Ui_used = ui_used
+                    return lnz, unz
+                end
+            end
+
+            @inbounds lip_k = Int(Lip[kg + 1])
+            @inbounds llen_k = Int(Llen[kg + 1])
+            li_used = lip_k + llen_k
+
+            @inbounds Uip[kg + 1] = Ti(ui_used)
+            @inbounds Ulen[kg + 1] = Ti(0)
+
+            @inbounds Udiag[kg + 1] = pivot
+
+            if pivrow != diagrow
+                common.noffdiag += Ti(1)
+                if Pinv_w[diagrow + 1] < 0
+                    kbar = _kflip(Int(Pinv_w[pivrow + 1]))
+                    Pblock[kbar + 1] = Ti(diagrow)
+                    Pinv_w[diagrow + 1] = Ti(_kflip(kbar))
+                end
+            end
+            Pblock[k + 1] = Ti(pivrow)
+            Pinv_w[pivrow + 1] = Ti(k)
+
+            lnz += llen_k + 1
+            unz += 1
+            continue
+        end
+
         _kernel_lsolve_numeric!(
             Pinv_w, Li, Lx, Stack_w, Lip,
             top, n, Llen, X_w, k1, fma_val
         )
 
-        @inbounds diagrow = Int(Pblock[k + 1])
         ok, pivrow, pivot, _ = _kernel_lpivot!(
             diagrow, k, n, tol, X_w,
             Li, Lx, Lip, Llen,
