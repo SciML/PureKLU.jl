@@ -327,7 +327,7 @@ function _analyze_worker!(
             flops1 = nk * (nk - 1) / 2 + (nk - 1) * nk * (2nk - 1) / 6
         elseif ordering == 0
             # AMD - fallback to natural for now
-            ok, lnz1, flops1 = _amd_or_natural!(view(Pblk, 1:nk), nk, Cp, Ci, common)
+            ok, lnz1, flops1 = _amd_or_natural!(Pblk, nk, Cp, Ci, common)
         elseif ordering == 1
             # COLAMD - fallback to natural for now
             @inbounds for k in 1:nk
@@ -365,29 +365,22 @@ function _analyze_worker!(
     return Sym
 end
 
-# AMD ordering for blocks larger than 3. We slice the block's CSC pattern
-# into fresh Ap/Ai vectors (size nk+1 / pc) and call amd_order!; the returned
-# permutation is then stored in `Pblk`.
+# AMD ordering for blocks larger than 3. The block's CSC pattern already
+# lives contiguously in `Cp[1:nk+1]` / `Ci[1:pc]`, and `amd_order!` only ever
+# reads its `Ap`/`Ai` (the matrix is never mutated), so we pass views directly
+# rather than copying into fresh `Ap_blk`/`Ai_blk`. The permutation is written
+# into the first `nk` entries of `Pblk` (which `amd_order!` is the sole writer
+# of), eliminating a third scratch vector + copy.
 function _amd_or_natural!(
-        Pblk, nk::Int, Cp::AbstractVector{Ti}, Ci::AbstractVector{Ti},
+        Pblk::Vector{Ti}, nk::Int, Cp::Vector{Ti}, Ci::Vector{Ti},
         common::KLUCommon{Ti}
     ) where {Ti}
-    Ap_blk = Vector{Ti}(undef, nk + 1)
-    @inbounds for k in 1:(nk + 1)
-        Ap_blk[k] = Cp[k]
-    end
     pc = Int(Cp[nk + 1])
-    Ai_blk = Vector{Ti}(undef, max(pc, 1))
-    @inbounds for p in 1:pc
-        Ai_blk[p] = Ci[p]
-    end
-    P = Vector{Ti}(undef, nk)
-    status, lnz1 = AMD.amd_order!(nk, Ap_blk, Ai_blk, P)
+    Ap_blk = view(Cp, 1:(nk + 1))
+    Ai_blk = view(Ci, 1:max(pc, 1))
+    status, lnz1 = AMD.amd_order!(nk, Ap_blk, Ai_blk, Pblk)
     if status < 0
         return false, 0.0, 0.0
-    end
-    @inbounds for k in 1:nk
-        Pblk[k] = P[k]
     end
     # `lnz1` is AMD's exact off-diagonal L fill count (SuiteSparse Info[AMD_LNZ]);
     # `_block_cap` adds the `nk` diagonal entries.  The flop count is left as the
