@@ -155,6 +155,9 @@ Base.transpose(K::AbstractKLUFactorization) = TransposeFact(K)
 
 # --- analyze / factor / refactor entry points -----------------------------
 
+_is_analyzed(K::KLUFactorization) = getfield(K, :symbolic).n != 0
+_is_factored(K::KLUFactorization) = getfield(K, :numeric).n != 0
+
 """
     klu_analyze!(K) -> K
     klu_analyze!(K, P, Q) -> K
@@ -163,9 +166,6 @@ Run the symbolic analysis (BTF + per-block ordering) on `K`, storing the
 result in `K.symbolic`. Subsequent factorisations reuse it. The two-arg
 form accepts user-supplied row/column permutations.
 """
-_is_analyzed(K::KLUFactorization) = getfield(K, :symbolic).n != 0
-_is_factored(K::KLUFactorization) = getfield(K, :numeric).n != 0
-
 function klu_analyze!(K::KLUFactorization{Tv, Ti}; check::Bool = true) where {Tv, Ti}
     _is_analyzed(K) && return K
     Sym = klu_analyze(K.n, K.colptr, K.rowval, K.common)
@@ -232,6 +232,17 @@ function klu_factor!(
     return K
 end
 
+"""
+    klu!(K::KLUFactorization, nzval::Vector; check=true, allowsingular=false) -> K
+    klu!(K::KLUFactorization, S::SparseMatrixCSC; check=true, allowsingular=false) -> K
+
+Refactor an already-factored `K` in place with new numeric values that share its
+existing sparsity pattern, reusing the symbolic analysis and preallocated numeric
+workspace. `K` must already have been factored (via [`klu`](@ref) or
+[`klu_factor!`](@ref)). New values are given either as a `nzval` vector matching the
+length of `K`'s stored values, or as a `SparseMatrixCSC` whose pattern matches `K`
+(a mismatched pattern throws). Mirrors `KLU.jl`'s `klu!`.
+"""
 function klu!(
         K::KLUFactorization{Tv, Ti}, nzval::Vector{Tv};
         check::Bool = true, allowsingular::Bool = false
@@ -274,14 +285,15 @@ function klu!(
     return klu!(K, S.nzval; check, allowsingular)
 end
 
+"""
+    klu_refactor!(K, vals; check=true, allowsingular=false) -> K
+
+Alias for [`klu!`](@ref): refactor an existing factorization in place with new
+numeric values that share the original sparsity pattern. Provided for naming
+parity with the analyze/factor/refactor entry points.
+"""
 klu_refactor!(args...; kwargs...) = klu!(args...; kwargs...)
 
-"""
-    klu(A; check=true, allowsingular=false, full_factor=true) -> K
-    klu(n, colptr, rowval, nzval; ...) -> K
-
-Compute the LU factorisation of a sparse matrix using KLU.
-"""
 # The `use_fma` kwarg accepts either a `Bool` or a `Val{true}/Val{false}`.
 # Both are normalised to a `Val` internally (via `_as_val`) and stored on
 # `K.common.use_fma`, so dispatch through the kernel hot loops is type-
@@ -290,6 +302,12 @@ Compute the LU factorisation of a sparse matrix using KLU.
 #   * `use_fma=true` (default) and `use_fma=Val(true)` are equivalent.
 #   * `use_fma=false` and `use_fma=Val(false)` opt out of FMA fusion and
 #     give bit-for-bit results identical to SuiteSparse `KLU.jl`.
+"""
+    klu(A; check=true, allowsingular=false, full_factor=true) -> K
+    klu(n, colptr, rowval, nzval; ...) -> K
+
+Compute the LU factorisation of a sparse matrix using KLU.
+"""
 function klu(
         n::Integer, colptr::Vector{Ti}, rowval::Vector{Ti}, nzval::Vector{Tv};
         check::Bool = true, allowsingular::Bool = false,
