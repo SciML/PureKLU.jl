@@ -529,12 +529,12 @@ end
 # keep `l_length` in a register across the inlined call boundary.
 @inline function _kernel_dfs!(
         j_in::Int, k::Int,
-        Pinv::Vector{Ti}, Llen::AbstractVector{Ti}, Lip::AbstractVector{Ti},
+        Pinv::Vector{Ti}, Llen::Vector{Ti}, Lip::Vector{Ti},
         Stack::Vector{Ti}, Flag::Vector{Ti}, Lpend::Vector{Ti},
         top_in::Int,
         block_Li::Vector{Ti}, Lip_k::Int,
         l_length::Int,
-        Ap_pos::Vector{Ti}
+        Ap_pos::Vector{Ti}, k1::Int
     ) where {Ti}
     head = 0
     @inbounds Stack[1] = Ti(j_in)
@@ -551,11 +551,11 @@ end
     @label restart
     @inbounds begin
         jnew = Int(Pinv[j + 1])
-        lip_jnew = Int(Lip[jnew + 1])
+        lip_jnew = Int(Lip[k1 + jnew + 1])
         if Flag[j + 1] != kT
             Flag[j + 1] = kT
             lp = Lpend[jnew + 1]
-            pos = Int((lp == emptyT) ? Llen[jnew + 1] : lp) - 1
+            pos = Int((lp == emptyT) ? Llen[k1 + jnew + 1] : lp) - 1
         else
             pos = Int(Ap_pos[head + 1]) - 1
         end
@@ -589,7 +589,7 @@ end
             head < 0 && break
             j = Int(Stack[head + 1])
             jnew = Int(Pinv[j + 1])
-            lip_jnew = Int(Lip[jnew + 1])
+            lip_jnew = Int(Lip[k1 + jnew + 1])
             pos = Int(Ap_pos[head + 1]) - 1
         end
     end
@@ -597,20 +597,20 @@ end
 end
 
 # Port of klu_kernel.c::lsolve_symbolic
-function _kernel_lsolve_symbolic!(
+@inline function _kernel_lsolve_symbolic!(
         n::Int, k::Int,
         Ap::Vector{Ti}, Ai::Vector{Ti}, Q::Vector{Ti},
         Pinv::Vector{Ti}, Stack::Vector{Ti},
         Flag::Vector{Ti}, Lpend::Vector{Ti},
         Ap_pos::Vector{Ti},
         block_Li::Vector{Ti},
-        Llen::AbstractVector{Ti}, Lip::AbstractVector{Ti},
+        Llen::Vector{Ti}, Lip::Vector{Ti},
         k1::Int, PSinv::Vector{Ti}
     ) where {Ti}
     top = n
     l_length = 0
     kglobal = k + k1
-    @inbounds Lip_k = Int(Lip[k + 1])
+    @inbounds Lip_k = Int(Lip[kglobal + 1])
     @inbounds oldcol = Int(Q[kglobal + 1])
     @inbounds pend = Int(Ap[oldcol + 2])
     @inbounds pstart = Int(Ap[oldcol + 1])
@@ -624,7 +624,7 @@ function _kernel_lsolve_symbolic!(
             if Pinv[i + 1] >= 0
                 top, l_length = _kernel_dfs!(
                     i, k, Pinv, Llen, Lip, Stack, Flag, Lpend,
-                    top, block_Li, Lip_k, l_length, Ap_pos
+                    top, block_Li, Lip_k, l_length, Ap_pos, k1
                 )
             else
                 Flag[i + 1] = kT
@@ -633,7 +633,7 @@ function _kernel_lsolve_symbolic!(
             end
         end
     end
-    @inbounds Llen[k + 1] = Ti(l_length)
+    @inbounds Llen[kglobal + 1] = Ti(l_length)
     return top
 end
 
@@ -703,16 +703,16 @@ end
 function _kernel_lsolve_numeric!(
         Pinv::Vector{Ti},
         block_Li::Vector{Ti}, block_Lx::Vector{Tv},
-        Stack::Vector{Ti}, Lip::AbstractVector{Ti},
-        top::Int, n::Int, Llen::AbstractVector{Ti},
-        X::Vector{Tv}, fma_val::Val
+        Stack::Vector{Ti}, Lip::Vector{Ti},
+        top::Int, n::Int, Llen::Vector{Ti},
+        X::Vector{Tv}, k1::Int, fma_val::Val
     ) where {Tv, Ti}
     return @inbounds for s in top:(n - 1)
         j = Int(Stack[s + 1])
         jnew = Int(Pinv[j + 1])
         xj = X[j + 1]
-        lip = Int(Lip[jnew + 1])
-        len = Int(Llen[jnew + 1])
+        lip = Int(Lip[k1 + jnew + 1])
+        len = Int(Llen[k1 + jnew + 1])
         # `block_Li[lip..lip+len-1]` are the row indices for one column of L,
         # which are pairwise distinct by construction (sparse LU never inserts
         # a row twice into a column).  The compiler can't see that, so we
@@ -726,16 +726,17 @@ function _kernel_lsolve_numeric!(
 end
 
 # Port of klu_kernel.c::lpivot
-function _kernel_lpivot!(
+@inline function _kernel_lpivot!(
         diagrow::Int, k::Int, n::Int,
         tol::Float64, X::Vector{Tv},
         block_Li::Vector{Ti}, block_Lx::Vector{Tv},
-        Lip::AbstractVector{Ti}, Llen::AbstractVector{Ti},
+        Lip::Vector{Ti}, Llen::Vector{Ti},
         Pinv::Vector{Ti}, firstrow_ref::Base.RefValue{Int},
-        common::KLUCommon{Ti}, fma_val::Val
+        common::KLUCommon{Ti}, k1::Int, fma_val::Val
     ) where {Tv, Ti}
     Tr = _real_eltype(Tv)
-    if Llen[k + 1] == 0
+    kglobal = k + k1
+    if Llen[kglobal + 1] == 0
         if common.halt_if_singular != 0
             return false, -1, zero(Tv), zero(Tr)
         end
@@ -752,11 +753,11 @@ function _kernel_lpivot!(
     pdiag = -1
     ppivrow = -1
     abs_pivot = -one(Tr)
-    @inbounds lip = Int(Lip[k + 1])
-    @inbounds len_full = Int(Llen[k + 1])
+    @inbounds lip = Int(Lip[kglobal + 1])
+    @inbounds len_full = Int(Llen[kglobal + 1])
     @inbounds last_row_index = Int(block_Li[lip + len_full])
 
-    @inbounds Llen[k + 1] = Ti(len_full - 1)
+    @inbounds Llen[kglobal + 1] = Ti(len_full - 1)
     len = len_full - 1
     diagrowT = Ti(diagrow)
 
@@ -820,22 +821,22 @@ function _kernel_lpivot!(
 end
 
 # Port of klu_kernel.c::prune
-function _kernel_prune!(
+@inline function _kernel_prune!(
         Lpend::Vector{Ti}, Pinv::Vector{Ti}, k::Int, pivrow::Int,
         block_Li::Vector{Ti}, block_Lx::Vector{Tv},
         block_Ui::Vector{Ti},
-        Uip::AbstractVector{Ti}, Lip::AbstractVector{Ti},
-        Ulen::AbstractVector{Ti}, Llen::AbstractVector{Ti}
+        Uip::Vector{Ti}, Lip::Vector{Ti},
+        Ulen::Vector{Ti}, Llen::Vector{Ti}, k1::Int
     ) where {Tv, Ti}
-    @inbounds uip_k = Int(Uip[k + 1])
-    @inbounds ulen_k = Int(Ulen[k + 1])
+    @inbounds uip_k = Int(Uip[k1 + k + 1])
+    @inbounds ulen_k = Int(Ulen[k1 + k + 1])
     emptyT = Ti(EMPTY)
     pivrowT = Ti(pivrow)
     return @inbounds for p in 0:(ulen_k - 1)
         j = Int(block_Ui[uip_k + p + 1])
         if Lpend[j + 1] == emptyT
-            lip_j = Int(Lip[j + 1])
-            llen_j = Int(Llen[j + 1])
+            lip_j = Int(Lip[k1 + j + 1])
+            llen_j = Int(Llen[k1 + j + 1])
             found = -1
             for p2 in 0:(llen_j - 1)
                 if block_Li[lip_j + p2 + 1] == pivrowT
@@ -880,9 +881,9 @@ function klu_kernel!(
         nk::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Ax::Vector{Tv},
         Q::Vector{Ti},
         block::KLUNumericBlock{Tv, Ti},
-        Udiag::AbstractVector{Tv},
-        Llen::AbstractVector{Ti}, Ulen::AbstractVector{Ti},
-        Lip::AbstractVector{Ti}, Uip::AbstractVector{Ti},
+        Udiag::Vector{Tv},
+        Llen::Vector{Ti}, Ulen::Vector{Ti},
+        Lip::Vector{Ti}, Uip::Vector{Ti},
         Pblock::Vector{Ti},
         wk::KernelWorkspace{Tv, Ti},
         k1::Int, PSinv::Vector{Ti},
@@ -893,126 +894,156 @@ function klu_kernel!(
     ) where {Tv, Ti, Tr <: Real}
     n = nk
     tol = common.tol
+
+    # Hoist the stable per-block references out of the per-column loop so we
+    # pay one `getproperty` each instead of one per column.  `_klu_grow!`
+    # resizes `block.Li/Lx/Ui/Ux` in place (same `Vector` object), so the
+    # hoisted references stay valid across a grow; only the cached capacities
+    # `cap_L`/`cap_U` need refreshing afterward.
+    Li = block.Li
+    Lx = block.Lx
+    Ui = block.Ui
+    Ux = block.Ux
+    Pinv_w = wk.Pinv
+    Stack_w = wk.Stack
+    X_w = wk.X
+    Flag_w = wk.Flag
+    Lpend_w = wk.Lpend
+    Ap_pos_w = wk.Ap_pos
+
     @inbounds for k in 1:n
-        wk.X[k] = zero(Tv)
-        wk.Flag[k] = Ti(EMPTY)
-        wk.Lpend[k] = Ti(EMPTY)
+        X_w[k] = zero(Tv)
+        Flag_w[k] = Ti(EMPTY)
+        Lpend_w[k] = Ti(EMPTY)
     end
     @inbounds for k in 1:n
         Pblock[k] = Ti(k - 1)
-        wk.Pinv[k] = Ti(_kflip(k - 1))
+        Pinv_w[k] = Ti(_kflip(k - 1))
     end
 
-    # Reset per-block used counts.  The underlying Vector capacities are
-    # already sized to AMD's lnz estimate by `_alloc_numeric` and persist
-    # across factor/refactor; we overwrite the live prefix in place.
-    block.Li_used = 0
-    block.Ui_used = 0
     memgrow = common.memgrow
-
     lnz = 0
     unz = 0
     firstrow_ref = wk.firstrow_ref
     firstrow_ref[] = 0
 
+    cap_L = length(Li)
+    cap_U = length(Ui)
+    # Per-block used counts kept in registers; flushed to `block` after the
+    # column loop (and on the singular early-out).
+    li_used = 0
+    ui_used = 0
+
     for k in 0:(n - 1)
+        kg = k1 + k
         # Reserve `n` slots for column k's L pattern.  If capacity is
         # insufficient, grow geometrically; otherwise just record the
         # starting offset.
-        old_len = block.Li_used
-        @inbounds Lip[k + 1] = Ti(old_len)
-        if old_len + n > length(block.Li)
+        old_len = li_used
+        @inbounds Lip[kg + 1] = Ti(old_len)
+        if old_len + n > cap_L
             _klu_grow!(block, :L, old_len + n, memgrow)
+            Li = block.Li
+            Lx = block.Lx
+            cap_L = length(Li)
         end
 
         top = _kernel_lsolve_symbolic!(
-            n, k, Ap, Ai, Q, wk.Pinv, wk.Stack,
-            wk.Flag, wk.Lpend, wk.Ap_pos,
-            block.Li, Llen, Lip, k1, PSinv
+            n, k, Ap, Ai, Q, Pinv_w, Stack_w,
+            Flag_w, Lpend_w, Ap_pos_w,
+            Li, Llen, Lip, k1, PSinv
         )
 
         _kernel_construct_column!(
-            k, Ap, Ai, Ax, Q, wk.X, k1, PSinv,
+            k, Ap, Ai, Ax, Q, X_w, k1, PSinv,
             Rs, scale_val,
             Offp, Offi, Offx
         )
         _kernel_lsolve_numeric!(
-            wk.Pinv, block.Li, block.Lx, wk.Stack, Lip,
-            top, n, Llen, wk.X, fma_val
+            Pinv_w, Li, Lx, Stack_w, Lip,
+            top, n, Llen, X_w, k1, fma_val
         )
 
         @inbounds diagrow = Int(Pblock[k + 1])
         ok, pivrow, pivot, _ = _kernel_lpivot!(
-            diagrow, k, n, tol, wk.X,
-            block.Li, block.Lx, Lip, Llen,
-            wk.Pinv, firstrow_ref, common,
-            fma_val
+            diagrow, k, n, tol, X_w,
+            Li, Lx, Lip, Llen,
+            Pinv_w, firstrow_ref, common,
+            k1, fma_val
         )
         if !ok
             common.status = KLU_SINGULAR
             if common.numerical_rank == Ti(EMPTY)
-                common.numerical_rank = Ti(k + k1)
-                @inbounds common.singular_col = Q[k + k1 + 1]
+                common.numerical_rank = Ti(kg)
+                @inbounds common.singular_col = Q[kg + 1]
             end
             if common.halt_if_singular != 0
+                block.Li_used = li_used
+                block.Ui_used = ui_used
                 return lnz, unz
             end
         end
 
         # Record actual L slots used (no shrink -- the slack is just
         # unused capacity for the next column).
-        @inbounds lip_k = Int(Lip[k + 1])
-        @inbounds llen_k = Int(Llen[k + 1])
-        block.Li_used = lip_k + llen_k
+        @inbounds lip_k = Int(Lip[kg + 1])
+        @inbounds llen_k = Int(Llen[kg + 1])
+        li_used = lip_k + llen_k
 
         # Build U for this column from Stack[top..n-1] and X.  Index-write
         # path: reserve `ulen` slots after the current used prefix.
-        u_off = block.Ui_used
-        @inbounds Uip[k + 1] = Ti(u_off)
+        u_off = ui_used
+        @inbounds Uip[kg + 1] = Ti(u_off)
         ulen = n - top
-        @inbounds Ulen[k + 1] = Ti(ulen)
-        if u_off + ulen > length(block.Ui)
+        @inbounds Ulen[kg + 1] = Ti(ulen)
+        if u_off + ulen > cap_U
             _klu_grow!(block, :U, u_off + ulen, memgrow)
+            Ui = block.Ui
+            Ux = block.Ux
+            cap_U = length(Ui)
         end
         @inbounds for s in top:(n - 1)
-            j = Int(wk.Stack[s + 1])
+            j = Int(Stack_w[s + 1])
             idx = u_off + (s - top) + 1
-            block.Ui[idx] = wk.Pinv[j + 1]
-            block.Ux[idx] = wk.X[j + 1]
-            wk.X[j + 1] = zero(Tv)
+            Ui[idx] = Pinv_w[j + 1]
+            Ux[idx] = X_w[j + 1]
+            X_w[j + 1] = zero(Tv)
         end
-        block.Ui_used = u_off + ulen
+        ui_used = u_off + ulen
 
-        Udiag[k + 1] = pivot
+        @inbounds Udiag[kg + 1] = pivot
 
         if pivrow != diagrow
             common.noffdiag += Ti(1)
-            if wk.Pinv[diagrow + 1] < 0
-                kbar = _kflip(Int(wk.Pinv[pivrow + 1]))
+            if Pinv_w[diagrow + 1] < 0
+                kbar = _kflip(Int(Pinv_w[pivrow + 1]))
                 Pblock[kbar + 1] = Ti(diagrow)
-                wk.Pinv[diagrow + 1] = Ti(_kflip(kbar))
+                Pinv_w[diagrow + 1] = Ti(_kflip(kbar))
             end
         end
         Pblock[k + 1] = Ti(pivrow)
-        wk.Pinv[pivrow + 1] = Ti(k)
+        Pinv_w[pivrow + 1] = Ti(k)
 
         _kernel_prune!(
-            wk.Lpend, wk.Pinv, k, pivrow, block.Li, block.Lx,
-            block.Ui, Uip, Lip, Ulen, Llen
+            Lpend_w, Pinv_w, k, pivrow, Li, Lx,
+            Ui, Uip, Lip, Ulen, Llen, k1
         )
 
         lnz += llen_k + 1
         unz += ulen + 1
     end
+    block.Li_used = li_used
+    block.Ui_used = ui_used
 
     # Remap L row indices using the final Pinv.  Each iteration updates a
     # distinct slot in block.Li (consecutive `p` values), so the writes
     # don't alias the reads in a later iteration.  Safe to vectorise.
     @inbounds for k in 0:(n - 1)
-        lip_k = Int(Lip[k + 1])
-        llen_k = Int(Llen[k + 1])
+        kg = k1 + k
+        lip_k = Int(Lip[kg + 1])
+        llen_k = Int(Llen[kg + 1])
         @simd ivdep for p in 0:(llen_k - 1)
-            block.Li[lip_k + p + 1] = Ti(wk.Pinv[Int(block.Li[lip_k + p + 1]) + 1])
+            Li[lip_k + p + 1] = Ti(Pinv_w[Int(Li[lip_k + p + 1]) + 1])
         end
     end
 
@@ -1162,11 +1193,11 @@ function _klu_factor_impl!(
             block_lnz, block_unz = klu_kernel!(
                 nk, Ap, Ai, Ax, Q,
                 Num.LUbx[block],
-                view(Num.Udiag, (k1 + 1):k2),
-                view(Num.Llen, (k1 + 1):k2),
-                view(Num.Ulen, (k1 + 1):k2),
-                view(Num.Lip, (k1 + 1):k2),
-                view(Num.Uip, (k1 + 1):k2),
+                Num.Udiag,
+                Num.Llen,
+                Num.Ulen,
+                Num.Lip,
+                Num.Uip,
                 Pblock,
                 wk, k1, Pinv, Num.Rs, scale_val,
                 Num.Offp, Num.Offi, Num.Offx,
