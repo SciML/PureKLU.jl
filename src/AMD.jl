@@ -193,6 +193,7 @@ function amd_2!(
     nel = 0
     lemax = 0
     me = EMPTY
+    lnz = 0.0
 
     dense = dense_alpha < 0 ? n - 2 : floor(Int, dense_alpha * sqrt(Float64(n)))
     dense = max(16, dense)
@@ -558,6 +559,13 @@ function amd_2!(
         if elenme != 0
             pfree = p
         end
+
+        # Accumulate nonzeros in L excluding the diagonal (amd_2.c Info[AMD_LNZ]).
+        # The new element has nvpiv pivots; its contribution block including the
+        # `ndense` dense rows/columns is (degme+ndense)-by-(degme+ndense).
+        f = Float64(nvpiv)
+        r = Float64(degme + ndense)
+        lnz += f * r + (f - 1.0) * f / 2.0
     end
 
     # --- Post-ordering setup: restore Pe and Elen by FLIP-ing ---
@@ -629,7 +637,7 @@ function amd_2!(
         k = Int(Next[i + 1])
         Last[k + 1] = Ti(i)
     end
-    return nothing
+    return lnz
 end
 
 """
@@ -832,19 +840,21 @@ function amd_1!(
     end
 
     # Pinv and P are output buffers (size n)
-    amd_2!(
+    lnz = amd_2!(
         n, Pe, Iw, Len, iwlen, pfree,
         Nv, Pinv, P, Head, Elen, Degree, W;
         dense_alpha, aggressive
     )
-    return nothing
+    return lnz
 end
 
 """
-    amd_order!(n, Ap, Ai, P; dense_alpha=10.0, aggressive=true) -> status
+    amd_order!(n, Ap, Ai, P; dense_alpha=10.0, aggressive=true) -> (status, lnz)
 
 Compute the AMD ordering of the symmetric pattern of `A+A'`. `P` is the
-output permutation. Mirrors `amd_order.c`. Returns `AMD_OK` on success.
+output permutation. Mirrors `amd_order.c`. Returns `(AMD_OK, lnz)` on
+success, where `lnz` is the number of off-diagonal nonzeros in `L`
+(SuiteSparse's `Info[AMD_LNZ]`). On failure returns `(status, 0.0)`.
 """
 function amd_order!(
         n::Int, Ap::AbstractVector{Ti}, Ai::AbstractVector{Ti},
@@ -852,14 +862,14 @@ function amd_order!(
         dense_alpha::Float64 = AMD_DEFAULT_DENSE,
         aggressive::Bool = AMD_DEFAULT_AGGRESSIVE != 0
     ) where {Ti <: Integer}
-    n <= 0 && return AMD_INVALID
+    n <= 0 && return (AMD_INVALID, 0.0)
     if n == 0
-        return AMD_OK
+        return (AMD_OK, 0.0)
     end
 
     nz = Int(Ap[n + 1])
     if nz < 0
-        return AMD_INVALID
+        return (AMD_INVALID, 0.0)
     end
 
     Len = Vector{Ti}(undef, n)
@@ -872,11 +882,11 @@ function amd_order!(
     slen = nzaat + nzaat ÷ 5
     slen += 7 * n
 
-    amd_1!(
+    lnz = amd_1!(
         n, Ap, Ai, P, Pinv, Len, slen;
         dense_alpha, aggressive
     )
-    return AMD_OK
+    return (AMD_OK, lnz)
 end
 
 end # module

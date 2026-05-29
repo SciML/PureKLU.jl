@@ -382,16 +382,16 @@ function _amd_or_natural!(
         Ai_blk[p] = Ci[p]
     end
     P = Vector{Ti}(undef, nk)
-    status = AMD.amd_order!(nk, Ap_blk, Ai_blk, P)
+    status, lnz1 = AMD.amd_order!(nk, Ap_blk, Ai_blk, P)
     if status < 0
         return false, 0.0, 0.0
     end
     @inbounds for k in 1:nk
         Pblk[k] = P[k]
     end
-    # Rough estimate of L fill-in -- matches SuiteSparse's coarse estimate when
-    # actual AMD_LNZ isn't available.
-    lnz1 = nk * (nk + 1) / 2
+    # `lnz1` is AMD's exact off-diagonal L fill count (SuiteSparse Info[AMD_LNZ]);
+    # `_block_cap` adds the `nk` diagonal entries.  The flop count is left as the
+    # coarse dense estimate (used only for the informational `Sym.est_flops`).
     flops1 = nk * (nk - 1) / 2 + (nk - 1) * nk * (2nk - 1) / 6
     return true, lnz1, flops1
 end
