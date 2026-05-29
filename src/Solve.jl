@@ -248,26 +248,63 @@ function _klu_tsolve_impl!(
     return B
 end
 
+# Columns shorter than this take the manual 2-way accumulator path; longer
+# columns keep the `@simd` reduction.  See `_klu_ltsolve!`.
+const _LTSOLVE_SHORT = 10
+
 function _klu_ltsolve!(
         n::Int, Lip::AbstractVector{Ti}, Llen::AbstractVector{Ti},
         block::KLUNumericBlock{Tv, Ti}, X::AbstractVector{Tv},
         conj_solve::Bool, fma_val::Val
     ) where {Tv, Ti}
+    Li = block.Li
+    Lx = block.Lx
     return @inbounds for k in (n - 1):-1:0
         lip = Int(Lip[k + 1])
         len = Int(Llen[k + 1])
-        acc = X[k + 1]
-        # Inner reduction into `acc`.  `@simd` permits reassociation so the
-        # compiler can vectorise (multiple partial accumulators) and break
-        # the serial FMA dependency.  See SciML/PureKLU.jl#1 for context.
-        @simd for p in 0:(len - 1)
-            lik = block.Lx[lip + p + 1]
-            if conj_solve
-                lik = conj(lik)
+        # Each column's reduction is a serial dependency chain on the
+        # accumulator (every FMA reads the previous one).  `@simd` only
+        # breaks that chain once the trip count is large enough to vectorise
+        # (>= 16 here, and even then only via element-wise gathers) -- so for
+        # the long columns of e.g. random factors it is the right tool, but
+        # for the short columns of banded/arrow factors (len ~ 1-9) those
+        # columns never vectorise and the loop runs latency-bound on a single
+        # accumulator.  Split short columns into two independent partials so
+        # the FMA units can pipeline them; keep the vectorising `@simd` path
+        # for long columns.  The recombination order differs from a serial
+        # sum, so tsolve remains approximate (within rtol; see correctness.jl).
+        if len < _LTSOLVE_SHORT
+            a0 = X[k + 1]
+            a1 = zero(Tv)
+            p = 0
+            while p + 1 < len
+                l0 = Lx[lip + p + 1]; l1 = Lx[lip + p + 2]
+                if conj_solve
+                    l0 = conj(l0); l1 = conj(l1)
+                end
+                a0 = _mulsub(a0, l0, X[Int(Li[lip + p + 1]) + 1], fma_val)
+                a1 = _mulsub(a1, l1, X[Int(Li[lip + p + 2]) + 1], fma_val)
+                p += 2
             end
-            acc = _mulsub(acc, lik, X[Int(block.Li[lip + p + 1]) + 1], fma_val)
+            if p < len
+                lik = Lx[lip + p + 1]
+                if conj_solve
+                    lik = conj(lik)
+                end
+                a0 = _mulsub(a0, lik, X[Int(Li[lip + p + 1]) + 1], fma_val)
+            end
+            X[k + 1] = a0 + a1
+        else
+            acc = X[k + 1]
+            @simd for p in 0:(len - 1)
+                lik = Lx[lip + p + 1]
+                if conj_solve
+                    lik = conj(lik)
+                end
+                acc = _mulsub(acc, lik, X[Int(Li[lip + p + 1]) + 1], fma_val)
+            end
+            X[k + 1] = acc
         end
-        X[k + 1] = acc
     end
 end
 
