@@ -31,29 +31,33 @@ function maxtrans!(
         Match::Vector{Ti},
         Work::Vector{Ti}
     ) where {Ti <: Integer}
-    Cheap = view(Work, 1:ncol)
-    Flag = view(Work, (ncol + 1):2ncol)
-    Istack = view(Work, (2ncol + 1):3ncol)
-    Jstack = view(Work, (3ncol + 1):4ncol)
-    Pstack = view(Work, (4ncol + 1):5ncol)
+    # The five `ncol`-length scratch stacks live contiguously inside `Work`,
+    # addressed by 0-based offsets `c_off/f_off/i_off/j_off/p_off`. Passing the single parent
+    # `Work` plus integer offsets to `augment!` (instead of five `SubArray`s)
+    # keeps a single base pointer live in the augmenting loop; the SubArray form
+    # spilled five base+offset pairs and ran ~3x slower than C `btf_l_maxtrans`.
+    c_off = 0
+    f_off = ncol
+    i_off = 2ncol
+    j_off = 3ncol
+    p_off = 4ncol
 
     @inbounds for j in 1:ncol
-        Cheap[j] = Ap[j]
-        Flag[j] = Ti(EMPTY)
+        Work[c_off + j] = Ap[j]
+        Work[f_off + j] = Ti(EMPTY)
     end
     @inbounds for i in 1:nrow
         Match[i] = Ti(EMPTY)
     end
 
-    work_done = Ref(0.0)
     mw = maxwork > 0 ? maxwork * Ap[ncol + 1] : 0.0
 
+    work_done = 0.0
     nmatch = 0
     work_limit_reached = false
     for k in 0:(ncol - 1)
-        result = augment!(
-            k, Ap, Ai, Match, Cheap, Flag, Istack, Jstack, Pstack,
-            work_done, mw
+        result, work_done = augment!(
+            k, Ap, Ai, Match, Work, c_off, f_off, i_off, j_off, p_off, work_done, mw
         )
         if result == 1
             nmatch += 1
@@ -63,69 +67,72 @@ function maxtrans!(
     end
 
     if work_limit_reached
-        work_done[] = Float64(EMPTY)
+        work_done = Float64(EMPTY)
     end
-    return nmatch, work_done[]
+    return nmatch, work_done
 end
 
 """
-    augment!(k, Ap, Ai, Match, Cheap, Flag, Istack, Jstack, Pstack, work, maxwork)
+    augment!(k, Ap, Ai, Match, Work, c_off, f_off, i_off, j_off, p_off, work_in, maxwork)
+        -> (result, work_local)
 
 Non-recursive depth-first augmenting-path search starting at column `k`
-(0-based). Returns 1 on success, 0 on failure, and `EMPTY` if a work
-budget was exhausted. Mirrors `btf_maxtrans.c::augment`.
+(0-based). The `Cheap/Flag/Istack/Jstack/Pstack` scratch arrays are stored
+contiguously in `Work` at 0-based offsets `c_off/f_off/i_off/j_off/p_off` (so e.g. `Cheap[j+1]`
+is `Work[c_off + j + 1]`). Returns `(1, work)` on success, `(0, work)` on failure,
+and `(EMPTY, work)` if a work budget was exhausted. Mirrors
+`btf_maxtrans.c::augment`.
 """
-function augment!(
-        k::Int, Ap, Ai, Match, Cheap, Flag, Istack, Jstack, Pstack,
-        work::Ref{Float64}, maxwork::Float64
-    )
-    Ti = eltype(Match)
+@inline function augment!(
+        k::Int, Ap::Vector{Ti}, Ai::Vector{Ti}, Match::Vector{Ti},
+        Work::Vector{Ti}, c_off::Int, f_off::Int, i_off::Int, j_off::Int, p_off::Int,
+        work_in::Float64, maxwork::Float64
+    ) where {Ti}
     tk = Ti(k)
     tempty = Ti(EMPTY)
     quick = maxwork > 0
     found = false
     i = tempty
     head = 0
-    work_local = work[]
-    @inbounds Jstack[1] = tk
+    work_local = work_in
+    @inbounds Work[j_off + 1] = tk
 
     @inbounds while head >= 0
-        j = Jstack[head + 1]
+        j = Work[j_off + head + 1]
         pend = Ap[j + 2]
 
-        if Flag[j + 1] != tk
-            Flag[j + 1] = tk
-            p = Cheap[j + 1]
+        if Work[f_off + j + 1] != tk
+            Work[f_off + j + 1] = tk
+            p = Work[c_off + j + 1]
             while p < pend && !found
                 i = Ai[p + 1]
                 found = Match[i + 1] == tempty
                 p += 1
             end
-            Cheap[j + 1] = p
+            Work[c_off + j + 1] = p
 
             if found
-                Istack[head + 1] = i
+                Work[i_off + head + 1] = i
                 break
             end
-            Pstack[head + 1] = Ap[j + 1]
+            Work[p_off + head + 1] = Ap[j + 1]
         end
 
         if quick && work_local > maxwork
-            work[] = work_local
-            return EMPTY
+            return EMPTY, work_local
         end
 
-        pstart = Pstack[head + 1]
+        pstart = Work[p_off + head + 1]
         p = pstart
         broke = false
         while p < pend
             i = Ai[p + 1]
             j2 = Match[i + 1]
-            if Flag[j2 + 1] != tk
-                Pstack[head + 1] = p + 1
-                Istack[head + 1] = i
+            if Work[f_off + j2 + 1] != tk
+                Work[p_off + head + 1] = p + 1
+                Work[i_off + head + 1] = i
                 head += 1
-                Jstack[head + 1] = j2
+                Work[j_off + head + 1] = j2
                 broke = true
                 break
             end
@@ -139,17 +146,15 @@ function augment!(
         end
     end
 
-    work[] = work_local
-
     if found
         @inbounds for hp in head:-1:0
-            jj = Jstack[hp + 1]
-            ii = Istack[hp + 1]
+            jj = Work[j_off + hp + 1]
+            ii = Work[i_off + hp + 1]
             Match[ii + 1] = jj
         end
-        return 1
+        return 1, work_local
     end
-    return 0
+    return 0, work_local
 end
 
 const UNVISITED = -2
