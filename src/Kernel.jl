@@ -458,11 +458,11 @@ function klu_scale!(
         common.status = KLU_INVALID
         return false
     end
-    if Ap[1] != 0 || Ap[n + 1] < 0
+    @inbounds if Ap[1] != 0 || Ap[n + 1] < 0
         common.status = KLU_INVALID
         return false
     end
-    for col in 1:n
+    @inbounds for col in 1:n
         if Ap[col] > Ap[col + 1]
             common.status = KLU_INVALID
             return false
@@ -481,7 +481,11 @@ function klu_scale!(
             W[row] = Ti(EMPTY)
         end
     end
-    for col in 1:n
+    # `row` is range-validated (1..n) before any `Rs[row]`/`W[row]` access, and
+    # `p` is bounded by the validated `Ap` cursor, so the array indexing here is
+    # provably in-bounds -- mirror the C reference, which does the same explicit
+    # data check and elides the redundant array-bound checks.
+    @inbounds for col in 1:n
         pend = Int(Ap[col + 1])
         for p in (Int(Ap[col]) + 1):pend
             row = Int(Ai[p]) + 1
