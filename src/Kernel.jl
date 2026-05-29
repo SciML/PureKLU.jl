@@ -119,7 +119,10 @@ end
 # `X` is fully re-zeroed at the top of every `klu_kernel!` call
 # (`X_w[k] = zero(Tv)` for `k in 1:n`), so it does not need its initial
 # allocation zeroed -- `undef` saves the redundant zero-fill on the cold
-# (allocation) path.  Solve/refactor use `Num.Xwork`, not this buffer.
+# (allocation) path.  This length-`n` convenience constructor is used only for
+# the empty placeholder workspace; `_alloc_numeric` instead builds the
+# workspace with `X` aliasing `Num.Xwork` (the solve/refactor scratch buffer),
+# since the kernel accumulator and the solve buffer never alias in time.
 KernelWorkspace{Tv, Ti}(n::Integer) where {Tv, Ti} = KernelWorkspace{Tv, Ti}(
     Vector{Ti}(undef, n),
     Vector{Ti}(undef, n),
@@ -268,6 +271,24 @@ function _alloc_numeric(
     Tr = _real_eltype(Tv)
     initmem_amd = common.initmem_amd
     LUbx = Vector{KLUNumericBlock{Tv, Ti}}(undef, nblocks)
+    # The kernel's per-block accumulator (`wk.X`) and the solve-time RHS
+    # buffer (`Num.Xwork`) never alias in time: the kernel re-zeros its
+    # accumulator at the top of every block and factor runs to completion
+    # before any solve, which fully re-fills `Xwork` before its first read.
+    # So a single length-`n` Vector (`n >= maxblock`) serves both, saving the
+    # separate length-`maxblock` `wk.X` allocation on the cold factor.  This is
+    # an ordinary owning Vector shared between two fields -- never resized, no
+    # `unsafe_wrap`.
+    Xwork = Vector{Tv}(undef, n)
+    wk = KernelWorkspace{Tv, Ti}(
+        Vector{Ti}(undef, maxblock),
+        Vector{Ti}(undef, maxblock),
+        Vector{Ti}(undef, maxblock),
+        Vector{Ti}(undef, maxblock),
+        Vector{Ti}(undef, maxblock),
+        Xwork,
+        Ref(0),
+    )
     @inbounds for b in 1:nblocks
         k1 = Int(Sym.R[b]); k2 = Int(Sym.R[b + 1])
         nk = k2 - k1
@@ -296,14 +317,26 @@ function _alloc_numeric(
         Vector{Ti}(undef, n),
         LUbx,
         Vector{Tv}(undef, n),
-        scale > 0 ? zeros(Tr, n) : Tr[],
-        zeros(Ti, n + 1),
+        # `Rs` is allocated only when `scale > 0`, and in that case `klu_scale!`
+        # unconditionally re-zeros all of `Rs[1..n]` (`Rs[row] = z`) before its
+        # row-norm accumulation, on every factor.  So the cold-path zero-fill is
+        # redundant -- `undef` elides the memset; the buffer is fully written by
+        # `klu_scale!` before any read.
+        scale > 0 ? Vector{Tr}(undef, n) : Tr[],
+        # `Offp` is chain-written start-to-end on the factor proper:
+        # `Offp[1] = 0`, then every column writes `Offp[col+2]` (the nk==1
+        # branch and `_kernel_construct_column!`), and each read of
+        # `Offp[col+1]` is of the previous column's already-written end.  Since
+        # the blocks partition all `n` columns, `Offp[1..n+1]` are all set
+        # before being read on a successful factor, so the initial zero-fill is
+        # redundant -- `undef` elides the cold-path memset.
+        Vector{Ti}(undef, n + 1),
         Vector{Ti}(undef, max(nzoff, 0)),
         Vector{Tv}(undef, max(nzoff, 0)),
         Sym.nzoff,
-        Vector{Tv}(undef, n),
+        Xwork,
         scale > 0 ? Vector{Tr}(undef, n) : Tr[],
-        KernelWorkspace{Tv, Ti}(maxblock),
+        wk,
         Vector{Ti}(undef, maxblock),
     )
     return Num
