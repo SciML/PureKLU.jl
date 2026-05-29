@@ -1,0 +1,7 @@
+# Identifiers carried over verbatim from the SuiteSparse C sources during the
+# port. They are variable names, not prose, so the spell checker should leave
+# them alone.
+[default.extend-words]
+pn = "pn"        # pointer-name index (AMD)
+lik = "lik"      # L[i,k] entry (solve kernels)
+hashi = "hashi"  # hash-bucket index (AMD supervariable hashing)
