@@ -141,7 +141,7 @@ end
 
         # Mine
         my_perm = Vector{Int64}(undef, n)
-        status = PKAMD.amd_order!(n, Ap0, Ai0, my_perm)
+        status, _ = PKAMD.amd_order!(n, Ap0, Ai0, my_perm)
         @test status == PKAMD.AMD_OK
         @test my_perm == ref_perm
     end
@@ -149,7 +149,7 @@ end
 
 @testset "AMD.amd_order!: matches SuiteSparse AMD on small known patterns" begin
     # 1x1 trivial
-    @test PKAMD.amd_order!(1, Int64[0, 0], Int64[], Vector{Int64}(undef, 1)) ==
+    @test PKAMD.amd_order!(1, Int64[0, 0], Int64[], Vector{Int64}(undef, 1))[1] ==
         PKAMD.AMD_OK
 
     # diagonal-only
