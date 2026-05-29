@@ -80,25 +80,25 @@ function augment!(
         work::Ref{Float64}, maxwork::Float64
     )
     Ti = eltype(Match)
+    tk = Ti(k)
+    tempty = Ti(EMPTY)
     quick = maxwork > 0
     found = false
-    i = Ti(EMPTY)
+    i = tempty
     head = 0
-    Jstack[1] = Ti(k)
+    work_local = work[]
+    @inbounds Jstack[1] = tk
 
-    p = Ti(0)
-    pend = Ti(0)
-    j = Ti(0)
-    while head >= 0
+    @inbounds while head >= 0
         j = Jstack[head + 1]
         pend = Ap[j + 2]
 
-        if Flag[j + 1] != Ti(k)
-            Flag[j + 1] = Ti(k)
+        if Flag[j + 1] != tk
+            Flag[j + 1] = tk
             p = Cheap[j + 1]
             while p < pend && !found
                 i = Ai[p + 1]
-                found = Match[i + 1] == Ti(EMPTY)
+                found = Match[i + 1] == tempty
                 p += 1
             end
             Cheap[j + 1] = p
@@ -110,18 +110,18 @@ function augment!(
             Pstack[head + 1] = Ap[j + 1]
         end
 
-        if quick && work[] > maxwork
+        if quick && work_local > maxwork
+            work[] = work_local
             return EMPTY
         end
 
         pstart = Pstack[head + 1]
         p = pstart
         broke = false
-        j2 = Ti(0)
         while p < pend
             i = Ai[p + 1]
             j2 = Match[i + 1]
-            if Flag[j2 + 1] != Ti(k)
+            if Flag[j2 + 1] != tk
                 Pstack[head + 1] = p + 1
                 Istack[head + 1] = i
                 head += 1
@@ -132,15 +132,17 @@ function augment!(
             p += 1
         end
 
-        work[] += (p - pstart + 1)
+        work_local += (p - pstart + 1)
 
         if !broke && p == pend
             head -= 1
         end
     end
 
+    work[] = work_local
+
     if found
-        for hp in head:-1:0
+        @inbounds for hp in head:-1:0
             jj = Jstack[hp + 1]
             ii = Istack[hp + 1]
             Match[ii + 1] = jj
@@ -239,48 +241,54 @@ function scc_dfs!(
         Cstack, Jstack, Pstack
     )
     Ti = eltype(Flag)
+    tunvisited = Ti(UNVISITED)
+    tunassigned = Ti(UNASSIGNED)
     chead = 0
     jhead = 0
-    Jstack[1] = Ti(j_start)
+    @inbounds Jstack[1] = Ti(j_start)
 
-    j = Ti(0)
-    while jhead >= 0
+    @inbounds while jhead >= 0
         j = Jstack[jhead + 1]
         jj = Q === nothing ? Int(j) : Int(btf_unflip(Q[j + 1]))
         pend = Ap[jj + 2]
 
-        if Flag[j + 1] == Ti(UNVISITED)
+        if Flag[j + 1] == tunvisited
             chead += 1
             Cstack[chead + 1] = j
             timestamp += 1
             Time[j + 1] = Ti(timestamp)
             Low[j + 1] = Ti(timestamp)
-            Flag[j + 1] = Ti(UNASSIGNED)
+            Flag[j + 1] = tunassigned
             Pstack[jhead + 1] = Ap[jj + 1]
         end
 
+        low_j = Low[j + 1]
         p = Pstack[jhead + 1]
         broke = false
         while p < pend
             i = Ai[p + 1]
-            if Flag[i + 1] == Ti(UNVISITED)
+            fi = Flag[i + 1]
+            if fi == tunvisited
                 Pstack[jhead + 1] = p + 1
+                Low[j + 1] = low_j
                 jhead += 1
                 Jstack[jhead + 1] = i
                 broke = true
                 break
-            elseif Flag[i + 1] == Ti(UNASSIGNED)
-                if Time[i + 1] < Low[j + 1]
-                    Low[j + 1] = Time[i + 1]
+            elseif fi == tunassigned
+                ti = Time[i + 1]
+                if ti < low_j
+                    low_j = ti
                 end
             end
             p += 1
         end
 
         if !broke && p == pend
+            Low[j + 1] = low_j
             jhead -= 1
 
-            if Low[j + 1] == Time[j + 1]
+            if low_j == Time[j + 1]
                 while true
                     ii = Cstack[chead + 1]
                     chead -= 1
@@ -293,8 +301,8 @@ function scc_dfs!(
             end
             if jhead >= 0
                 parent = Jstack[jhead + 1]
-                if Low[j + 1] < Low[parent + 1]
-                    Low[parent + 1] = Low[j + 1]
+                if low_j < Low[parent + 1]
+                    Low[parent + 1] = low_j
                 end
             end
         end
