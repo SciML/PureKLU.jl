@@ -19,7 +19,7 @@ const SUITESPARSE = KLU
 
 function compare_fma_on(A::SparseMatrixCSC)
     K_ref = SUITESPARSE.klu(A)
-    K_pj = PureKLU.klu(A)  # use_fma=true is default
+    K_pj = PureKLU.klu(A; detect_banded = false)  # use_fma=true is default; detect_banded off for bit-exact KLU parity
     # Structural fields are unchanged by FMA -- still strict
     @test K_ref.p == K_pj.p
     @test K_ref.q == K_pj.q

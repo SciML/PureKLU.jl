@@ -34,15 +34,24 @@ numeric values change (same sparsity pattern).
 ## Bit-for-bit equivalence with KLU.jl
 
 `klu(A; use_fma = Val(false))` reproduces `KLU.jl`'s results bit-for-bit for every
-field (`L`, `U`, `F`, `p`, `q`, `R`, `Rs`, solve and refactor output). The default
-`use_fma = Val(true)` fuses the kernel's multiply-subtract loops into FMA
-instructions: same result up to one ULP, and faster on hardware with FMA.
+field (`L`, `U`, `F`, `p`, `q`, `R`, `Rs`, solve and refactor output) on the general
+factorization. The default `use_fma = Val(true)` fuses the kernel's
+multiply-subtract loops into FMA instructions: same result up to one ULP, and
+faster on hardware with FMA.
 
 ```julia
 klu(A)                       # FMA on (default)
 klu(A; use_fma = false)      # SSE2-equivalent, bit-for-bit KLU.jl match
 klu(A; use_fma = Val(false)) # same, fully type-stable
 ```
+
+!!! note "Banded fast path and bit-for-bit equivalence"
+    `detect_banded` (**on by default**) factors narrow-band blocks in their
+    natural order, skipping AMD. This is faster but uses a different elimination
+    order, so the result is *not* bit-identical to `KLU.jl` (it is a different
+    but equally valid factorization that solves to full accuracy). Pass
+    `klu(A; detect_banded = false)` to force the general AMD path, which *is*
+    byte-for-byte identical to libklu.
 
 ## API compatibility with KLU.jl
 

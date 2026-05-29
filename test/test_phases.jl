@@ -64,7 +64,7 @@ end
 Same fields, read from PureKLU's symbolic struct.
 """
 function pureklu_internal_btf(A::SparseMatrixCSC)
-    F = PureKLU.klu(A; use_fma = USE_FMA)
+    F = PureKLU.klu(A; use_fma = USE_FMA, detect_banded = false)
     Sym = getfield(F, :symbolic)
     return Int.(Sym.P), Int.(Sym.Q), Int.(Sym.R[1:(Int(Sym.nblocks) + 1)]),
         Int(Sym.structural_rank), Int(Sym.nblocks),
@@ -182,7 +182,7 @@ end
         A = sprand(n, n, 0.2) + n * I
         # configure both with the same scale mode
         K_ref = KLU.klu(A; check = false)
-        K_pj = PureKLU.klu(A; check = false, use_fma = USE_FMA)
+        K_pj = PureKLU.klu(A; check = false, use_fma = USE_FMA, detect_banded = false)
         K_ref.common.scale = Int32(scale)
         K_pj.common.scale = Int32(scale)
         KLU.klu_factor!(K_ref)
@@ -200,7 +200,7 @@ end
         A = sprand(n, n, 0.1) + n * I
         dropzeros!(A)
         K_ref = KLU.klu(A; check = false)
-        K_pj = PureKLU.klu(A; check = false, use_fma = USE_FMA)
+        K_pj = PureKLU.klu(A; check = false, use_fma = USE_FMA, detect_banded = false)
         K_ref.common.scale = Int32(0)
         K_pj.common.scale = Int32(0)
         KLU.klu_factor!(K_ref)
@@ -239,7 +239,7 @@ end
     ]
     for A in test_cases
         K_ref = KLU.klu(A)
-        K_pj = PureKLU.klu(A; use_fma = USE_FMA)
+        K_pj = PureKLU.klu(A; use_fma = USE_FMA, detect_banded = false)
         @test K_ref.symbolic.nz == getfield(K_pj, :symbolic).nz
         @test K_ref.symbolic.nzoff == getfield(K_pj, :symbolic).nzoff
         @test K_ref.symbolic.nblocks == getfield(K_pj, :symbolic).nblocks
@@ -261,7 +261,7 @@ end
     ]
     for A in test_cases
         K_ref = KLU.klu(A)
-        K_pj = PureKLU.klu(A; use_fma = USE_FMA)
+        K_pj = PureKLU.klu(A; use_fma = USE_FMA, detect_banded = false)
         @test K_ref.numeric.lnz == getfield(K_pj, :numeric).lnz
         @test K_ref.numeric.unz == getfield(K_pj, :numeric).unz
         @test K_ref.numeric.max_lnz_block ==
@@ -277,7 +277,7 @@ end
 
 function strict_match_all(A::SparseMatrixCSC)
     K_ref = KLU.klu(A)
-    K_pj = PureKLU.klu(A; use_fma = USE_FMA)
+    K_pj = PureKLU.klu(A; use_fma = USE_FMA, detect_banded = false)
     @test K_ref.p == K_pj.p
     @test K_ref.q == K_pj.q
     @test K_ref.R == K_pj.R
@@ -358,7 +358,7 @@ end
         Are = sprand(n, n, 0.2)
         Aim = sprand(n, n, 0.2)
         A = Are + im * Aim + n * I
-        K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma = false)
+        K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma = false, detect_banded = false)
         @test K_ref.p == K_pj.p
         @test K_ref.q == K_pj.q
         @test K_ref.L ≈ K_pj.L
@@ -372,7 +372,7 @@ end
 @testset "solve: vector, matrix, complex RHS all match" begin
     Random.seed!(7)
     A = sprand(20, 20, 0.2) + 20 * I
-    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma = USE_FMA)
+    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma = USE_FMA, detect_banded = false)
 
     # vector RHS
     b = randn(20)
@@ -392,7 +392,7 @@ end
 @testset "tsolve / adjoint solve match" begin
     Random.seed!(8)
     A = sprand(20, 20, 0.2) + 20 * I
-    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma = USE_FMA)
+    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma = USE_FMA, detect_banded = false)
     b = randn(20)
     B = randn(20, 4)
 
@@ -406,7 +406,7 @@ end
     Random.seed!(9)
     A = sprand(ComplexF64, 15, 15, 0.3)
     A = A + 15 * I
-    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma = false)
+    K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma = false, detect_banded = false)
     b = randn(ComplexF64, 15)
 
     # adjoint: A^H x = b
@@ -435,14 +435,14 @@ end
         A = sparse(I_idx, J_idx, V1, n, n)
         B = sparse(I_idx, J_idx, V2, n, n)
         K_ref = KLU.klu(A); KLU.klu!(K_ref, B)
-        K_pj = PureKLU.klu(A; use_fma = USE_FMA); PureKLU.klu!(K_pj, B)
+        K_pj = PureKLU.klu(A; use_fma = USE_FMA, detect_banded = false); PureKLU.klu!(K_pj, B)
         @test K_ref.L == K_pj.L
         @test K_ref.U == K_pj.U
         @test K_ref.F == K_pj.F
         @test K_ref.Rs == K_pj.Rs
         # refactor with just nzval
         K_ref2 = KLU.klu(A); KLU.klu!(K_ref2, B.nzval)
-        K_pj2 = PureKLU.klu(A; use_fma = USE_FMA); PureKLU.klu!(K_pj2, B.nzval)
+        K_pj2 = PureKLU.klu(A; use_fma = USE_FMA, detect_banded = false); PureKLU.klu!(K_pj2, B.nzval)
         @test K_ref2.L == K_pj2.L
         @test K_ref2.U == K_pj2.U
         @test K_ref2.F == K_pj2.F
@@ -457,7 +457,7 @@ end
         A = sprand(n, n, 0.3) + n * I
         # When btf=0 and ordering=2, KLU uses identity-ish processing.
         K_ref = KLU.klu(A; check = false)
-        K_pj = PureKLU.klu(A; check = false, use_fma = USE_FMA)
+        K_pj = PureKLU.klu(A; check = false, use_fma = USE_FMA, detect_banded = false)
         K_ref.common.btf = Int32(0); K_pj.common.btf = Int32(0)
         K_ref.common.ordering = Int32(2); K_pj.common.ordering = Int32(2)
         KLU.klu_factor!(K_ref)
@@ -565,7 +565,7 @@ end
     proto = sprand(n, n, 0.2) + n * I
     I_idx, J_idx, _ = findnz(proto)
     K_ref = KLU.klu(proto)
-    K_pj = PureKLU.klu(proto; use_fma = USE_FMA)
+    K_pj = PureKLU.klu(proto; use_fma = USE_FMA, detect_banded = false)
     for iter in 1:5
         V = randn(length(I_idx)) .+ 0.7
         B = sparse(I_idx, J_idx, V, n, n)
@@ -587,7 +587,7 @@ end
     for n in (10, 30, 60, 100)
         A = sprand(n, n, 0.15) + n * I
         dropzeros!(A)
-        for K in (KLU.klu(A), PureKLU.klu(A; use_fma = USE_FMA))
+        for K in (KLU.klu(A), PureKLU.klu(A; use_fma = USE_FMA, detect_banded = false))
             Rs = Diagonal(K.Rs)
             @test Rs \ A[K.p, K.q] ≈ K.L * K.U + K.F
         end
@@ -599,7 +599,7 @@ end
 @testset "ldiv! vs \\\\: both implementations consistent" begin
     Random.seed!(81)
     A = sprand(40, 40, 0.15) + 40 * I
-    K_pj = PureKLU.klu(A; use_fma = USE_FMA)
+    K_pj = PureKLU.klu(A; use_fma = USE_FMA, detect_banded = false)
     K_ref = KLU.klu(A)
     b = randn(40)
     x1 = K_pj \ b
@@ -643,7 +643,7 @@ end
 @testset "Degenerate sizes 1x1, 2x2" begin
     # 1x1
     A1 = sparse(reshape([3.0], 1, 1))
-    K_ref = KLU.klu(A1); K_pj = PureKLU.klu(A1; use_fma = USE_FMA)
+    K_ref = KLU.klu(A1); K_pj = PureKLU.klu(A1; use_fma = USE_FMA, detect_banded = false)
     @test K_ref.p == K_pj.p
     @test K_ref.q == K_pj.q
     @test K_ref.U == K_pj.U
@@ -657,7 +657,7 @@ end
             Float64[3 1; 1 3],
         )
         A = sparse(M)
-        K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma = USE_FMA)
+        K_ref = KLU.klu(A); K_pj = PureKLU.klu(A; use_fma = USE_FMA, detect_banded = false)
         @test K_ref.p == K_pj.p
         @test K_ref.q == K_pj.q
         @test K_ref.L == K_pj.L
@@ -684,4 +684,41 @@ end
         dropzeros!(A2)
         strict_match_all(A2)
     end
+end
+
+# ---------- banded fast path (default-on) ----------------------------------
+# `detect_banded` defaults to `true`: a narrow-band block is factored in its
+# natural order (skipping AMD).  That is faster but NOT bit-identical to
+# libklu's AMD ordering (hence the bit-exact testsets above pass
+# `detect_banded = false`).  Verify the default-on banded path still solves
+# correctly, refactors like an ordinary factorization, and falls back cleanly
+# on non-banded input.
+@testset "banded fast path (default-on) solves correctly" begin
+    _bandm(n, bw) = (
+        d = Dict{Int, Vector{Float64}}(); d[0] = Float64(n) .* ones(n);
+        for k in 1:bw
+            d[k] = -ones(n - k); d[-k] = -ones(n - k)
+        end;
+        dropzeros!(spdiagm((k => v for (k, v) in d)...))
+    )
+    Random.seed!(42)
+    A = _bandm(200, 5); n = size(A, 1); b = randn(n); B = randn(n, 3)
+    xref = KLU.klu(A) \ b; xtref = KLU.klu(A)' \ b
+    @test PureKLU.klu(A) \ b ≈ xref rtol = 1.0e-7                          # defaults (detect_banded on)
+    @test PureKLU.klu(A; detect_banded = true) \ b ≈ xref rtol = 1.0e-7
+    @test PureKLU.klu(A; detect_banded = true)' \ b ≈ xtref rtol = 1.0e-7  # transpose path
+    @test PureKLU.klu(A; detect_banded = true) \ B ≈ KLU.klu(A) \ B rtol = 1.0e-7  # multi-rhs
+    @test norm(A * (PureKLU.klu(A) \ b) - b) / norm(b) < 1.0e-8            # residual, default path
+
+    # the banded path is an ordinary KLUFactorization -- refactor (klu!) works
+    A2 = 3.0 .* A                  # same pattern, scaled values
+    K = PureKLU.klu(A; detect_banded = true)
+    PureKLU.klu!(K, A2.nzval)
+    @test norm(A2 * (K \ b) - b) / norm(b) < 1.0e-8
+    @test K \ b ≈ KLU.klu(A2) \ b rtol = 1.0e-7
+
+    # a non-banded matrix still solves correctly with defaults on (fallback)
+    Arand = dropzeros!(sprand(MersenneTwister(7), 200, 200, 0.05) + 200 * I)
+    br = randn(200)
+    @test PureKLU.klu(Arand) \ br ≈ KLU.klu(Arand) \ br rtol = 1.0e-7
 end
