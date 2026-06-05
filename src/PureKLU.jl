@@ -83,7 +83,14 @@ function kluerror(status::KLUStatus)
     if status == KLU_OK
         return
     elseif status == KLU_SINGULAR
-        throw(LinearAlgebra.SingularException(0))
+        # PureKLU never throws on numerical singularity. A zero/empty pivot
+        # is surfaced via `common.status == KLU_SINGULAR` (plus
+        # `numerical_rank`/`singular_col`) for the caller to inspect; it is
+        # never raised as a `SingularException`, regardless of the `check`
+        # keyword. This intentionally diverges from KLU.jl/libklu, which
+        # throw here. Returning is a defensive backstop so no code path can
+        # turn a numerical singularity into an exception.
+        return
     elseif status == KLU_OUT_OF_MEMORY
         throw(OutOfMemoryError())
     elseif status == KLU_INVALID
@@ -221,10 +228,12 @@ function klu_factor!(
             existing; allowsingular
         )
         K.common.halt_if_singular = Cint(1)
+        # Hard (negative) errors still throw; numerical singularity
+        # (`KLU_SINGULAR`) never does -- it is left on `common.status` for the
+        # caller to read. `halt_if_singular` still governs whether the kernel
+        # *stops* factoring at the zero pivot, but neither it nor `check`
+        # raises.
         if K.common.status < KLU_OK && check
-            kluerror(K.common)
-        end
-        if K.common.status == KLU_SINGULAR && !allowsingular && check
             kluerror(K.common)
         end
         setfield!(K, :numeric, Num)
@@ -260,10 +269,8 @@ function klu!(
         K.colptr, K.rowval, K.nzval, K.common; allowsingular
     )
     K.common.halt_if_singular = Cint(1)
+    # As in `klu_factor!`: hard errors throw, numerical singularity does not.
     if K.common.status < KLU_OK && check
-        kluerror(K.common)
-    end
-    if K.common.status == KLU_SINGULAR && !allowsingular && check
         kluerror(K.common)
     end
     return K
@@ -360,7 +367,10 @@ function solve!(
     _is_factored(K) || klu_factor!(K)
     size(B, 1) == size(K, 1) || throw(DimensionMismatch())
     klu_solve!(getfield(K, :symbolic), getfield(K, :numeric), B, K.common)
-    if K.common.status != KLU_OK && check
+    # A solve on a singular factor returns its computed vector with the status
+    # left `KLU_SINGULAR`; only hard (negative) errors throw. PureKLU never
+    # raises a `SingularException` on numerical singularity.
+    if K.common.status < KLU_OK && check
         kluerror(K.common)
     end
     return B
@@ -378,7 +388,8 @@ function solve!(
         getfield(parent_K, :symbolic), getfield(parent_K, :numeric),
         B, parent_K.common; conj_solve = (Tv <: Complex)
     )
-    if parent_K.common.status != KLU_OK && check
+    # See `solve!`: singular status is left for the caller; only hard errors throw.
+    if parent_K.common.status < KLU_OK && check
         kluerror(parent_K.common)
     end
     return B
@@ -396,7 +407,8 @@ function solve!(
         getfield(parent_K, :symbolic), getfield(parent_K, :numeric),
         B, parent_K.common; conj_solve = false
     )
-    if parent_K.common.status != KLU_OK && check
+    # See `solve!`: singular status is left for the caller; only hard errors throw.
+    if parent_K.common.status < KLU_OK && check
         kluerror(parent_K.common)
     end
     return B
