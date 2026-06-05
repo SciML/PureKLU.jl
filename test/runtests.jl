@@ -129,6 +129,7 @@ include(joinpath(@__DIR__, "test_fma_on.jl"))
 include(joinpath(@__DIR__, "test_allocations.jl"))
 include(joinpath(@__DIR__, "test_generic_eltypes.jl"))
 include(joinpath(@__DIR__, "test_fully_preallocated.jl"))
+include(joinpath(@__DIR__, "test_singular_fastexit.jl"))
 
 @testset "full_factor = false" begin
     for T in (Float64, ComplexF64, Float32, ComplexF32)

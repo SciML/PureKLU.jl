@@ -23,6 +23,15 @@ function _klu_solve_impl!(
         B::AbstractVecOrMat{Tv}, common::KLUCommon{Ti},
         fma_val::Val
     ) where {Tv, Ti, Tr}
+    # A factorization that hit a zero/empty pivot recorded the offending
+    # column in `common.numerical_rank`/`common.singular_col`.  Solving such a
+    # factor would divide by the stored zero pivot and produce Inf/NaN, so we
+    # leave the status singular for the caller to handle (`check=true` raises a
+    # `SingularException`).  For a well-conditioned factor `numerical_rank ==
+    # EMPTY`, so this is a no-op and the well-conditioned solve is unchanged.
+    sing_rank = common.numerical_rank
+    sing_col = common.singular_col
+    was_singular = sing_rank != Ti(EMPTY)
     common.status = KLU_OK
     n = Int(Sym.n)
     size(B, 1) == n || throw(DimensionMismatch())
@@ -104,6 +113,11 @@ function _klu_solve_impl!(
             B[Int(Q[k + 1]) + 1, col] = X[k + 1]
         end
     end
+    if was_singular
+        common.status = KLU_SINGULAR
+        common.numerical_rank = sing_rank
+        common.singular_col = sing_col
+    end
     return B
 end
 
@@ -166,6 +180,12 @@ function _klu_tsolve_impl!(
         fma_val::Val;
         conj_solve::Bool = false
     ) where {Tv, Ti, Tr}
+    # See `_klu_solve_impl!`: a singular factor would divide by a stored zero
+    # pivot, so re-assert the singular status after the (transposed) solve and
+    # leave it for the caller.  No-op for a well-conditioned factor.
+    sing_rank = common.numerical_rank
+    sing_col = common.singular_col
+    was_singular = sing_rank != Ti(EMPTY)
     common.status = KLU_OK
     n = Int(Sym.n)
     size(B, 1) == n || throw(DimensionMismatch())
@@ -255,6 +275,11 @@ function _klu_tsolve_impl!(
                 B[Int(Pnum[k + 1]) + 1, col] = X[k + 1]
             end
         end
+    end
+    if was_singular
+        common.status = KLU_SINGULAR
+        common.numerical_rank = sing_rank
+        common.singular_col = sing_col
     end
     return B
 end

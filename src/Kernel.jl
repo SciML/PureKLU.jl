@@ -1039,7 +1039,7 @@ function klu_kernel!(
                 Pinv_w, firstrow_ref, common,
                 k1, fma_val
             )
-            if !ok
+            if !ok || iszero(pivot)
                 common.status = KLU_SINGULAR
                 if common.numerical_rank == Ti(EMPTY)
                     common.numerical_rank = Ti(kg)
@@ -1088,7 +1088,7 @@ function klu_kernel!(
             Pinv_w, firstrow_ref, common,
             k1, fma_val
         )
-        if !ok
+        if !ok || iszero(pivot)
             common.status = KLU_SINGULAR
             if common.numerical_rank == Ti(EMPTY)
                 common.numerical_rank = Ti(kg)
