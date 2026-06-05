@@ -90,7 +90,12 @@ using LinearAlgebra
             @testset "Singular matrix" begin
                 S = sparse([1 2; 0 0])
                 S = convert(SparseMatrixCSC{Tv, Ti}, S)
-                @test_throws SingularException PureKLU.klu(S)
+                # PureKLU never throws on numerical singularity (diverges from
+                # KLU.jl/libklu, which raise here). The singular factor is
+                # surfaced via `common.status == KLU_SINGULAR` instead.
+                K = PureKLU.klu(S)
+                @test K.common.status == PureKLU.KLU_SINGULAR
+                @test !issuccess(K)
             end
         end
     end
@@ -117,7 +122,10 @@ end
 
 @testset "check=false" begin
     for A in sparse.((Float64[1 2; 0 0], ComplexF64[1 2; 0 0]))
-        @test_throws SingularException PureKLU.klu(A)
+        # Even the default check=true path does not throw on numerical
+        # singularity; it reports KLU_SINGULAR (diverges from KLU.jl/libklu).
+        @test PureKLU.klu(A).common.status == PureKLU.KLU_SINGULAR
+        @test !issuccess(PureKLU.klu(A))
         @test !issuccess(PureKLU.klu(A; check = false))
         @test issuccess(PureKLU.klu(A; allowsingular = true); allowsingular = true)
     end
@@ -129,6 +137,7 @@ include(joinpath(@__DIR__, "test_fma_on.jl"))
 include(joinpath(@__DIR__, "test_allocations.jl"))
 include(joinpath(@__DIR__, "test_generic_eltypes.jl"))
 include(joinpath(@__DIR__, "test_fully_preallocated.jl"))
+include(joinpath(@__DIR__, "test_singular_fastexit.jl"))
 
 @testset "full_factor = false" begin
     for T in (Float64, ComplexF64, Float32, ComplexF32)
