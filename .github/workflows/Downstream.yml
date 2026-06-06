@@ -7,12 +7,6 @@ on:
 
 jobs:
   test:
-    # Disabled until a package actually depends on PureKLU. Because PureKLU's
-    # deps are compatible with LinearSolve's, `Pkg.develop` + `Pkg.test` would
-    # NOT hit a ResolverError (the usual "incompatible -> pass" no-op); it would
-    # instead run LinearSolve's full test suite on every PureKLU PR. Flip this
-    # to `true` once LinearSolve.jl (or another consumer) adds PureKLU as a dep.
-    if: false
     name: ${{ matrix.package.repo }}/${{ matrix.package.group }}/${{ matrix.julia-version }}
     strategy:
       fail-fast: false
