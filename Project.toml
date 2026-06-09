@@ -29,6 +29,7 @@ Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 SuiteSparse_jll = "bea87d4a-7f5b-5778-9afe-8cc45184846c"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 
 [targets]
-test = ["Test", "KLU", "Random", "AMD", "SuiteSparse_jll", "SparseArrays", "ForwardDiff"]
+test = ["Test", "KLU", "Random", "AMD", "SuiteSparse_jll", "SparseArrays", "ForwardDiff", "Pkg"]
