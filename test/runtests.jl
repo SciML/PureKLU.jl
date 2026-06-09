@@ -1,3 +1,13 @@
+const GROUP = get(ENV, "GROUP", "All")
+
+if GROUP == "QA"
+    using Pkg
+    Pkg.activate(joinpath(@__DIR__, "qa"))
+    Pkg.instantiate()
+    include(joinpath(@__DIR__, "qa", "qa.jl"))
+    exit()
+end
+
 using PureKLU
 using PureKLU: increment!, KLUITypes, decrement, klu!, KLUFactorization,
     klu_analyze!, klu_factor!

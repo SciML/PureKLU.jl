@@ -10,20 +10,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   tests:
-    name: Julia ${{ matrix.version }} - ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        version:
-          - '1.10'
-          - '1'
-        os:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
-    uses: "SciML/.github/.github/workflows/tests.yml@v1"
+    uses: "SciML/.github/.github/workflows/grouped-tests.yml@v1"
     with:
-      julia-version: "${{ matrix.version }}"
-      os: "${{ matrix.os }}"
       coverage: false
     secrets: "inherit"
