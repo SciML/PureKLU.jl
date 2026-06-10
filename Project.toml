@@ -10,9 +10,15 @@ PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
 [compat]
+AMD = "0.5"
 ForwardDiff = "1"
+KLU = "0.6"
 MuladdMacro = "0.2.4"
 PrecompileTools = "1"
+Random = "1"
+SparseArrays = "1"
+SuiteSparse_jll = "7"
+Test = "1"
 julia = "1.10"
 [extras]
 AMD = "14f7f29c-3bd6-536c-9a0b-7339e30b5a3e"
@@ -22,6 +28,7 @@ Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 SuiteSparse_jll = "bea87d4a-7f5b-5778-9afe-8cc45184846c"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 
 [targets]
-test = ["Test", "KLU", "Random", "AMD", "SuiteSparse_jll", "SparseArrays", "ForwardDiff"]
+test = ["Test", "KLU", "Random", "AMD", "SuiteSparse_jll", "SparseArrays", "ForwardDiff", "Pkg"]
