@@ -14,17 +14,16 @@ ordering is currently approximated by natural ordering; blocks of size
 """
 module PureKLU
 
-using SparseArrays
-using SparseArrays: SparseMatrixCSC
-using LinearAlgebra
+using SparseArrays: SparseArrays, SparseMatrixCSC
+using LinearAlgebra: LinearAlgebra, Adjoint, Transpose
 using MuladdMacro: @muladd  # kept for future opt-in FMA; see src/Kernel.jl
-# Full `using` (not a selective `using PrecompileTools: ...`) so the bare
-# `PrecompileTools` name is in scope: the `@setup_workload`/`@compile_workload`
-# macro expansion in PrecompileTools 1.0.x references it directly, so a
-# selective import breaks loading on the lower compat bound (see Downgrade CI).
-using PrecompileTools
+# The bare `PrecompileTools` name must stay in scope: the
+# `@setup_workload`/`@compile_workload` macro expansion in PrecompileTools 1.0.x
+# references it directly, so importing the macros without the module name breaks
+# loading on the lower compat bound (see Downgrade CI).
+using PrecompileTools: PrecompileTools, @setup_workload, @compile_workload
 import SparseArrays: nnz, nonzeros
-import Base: (\), size, getproperty, setproperty!, propertynames, show
+import Base: size, getproperty, setproperty!, show
 
 export klu, klu!
 export klu_factor!, klu_refactor!, klu_analyze!, solve!
