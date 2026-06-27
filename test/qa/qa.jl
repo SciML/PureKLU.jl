@@ -1,17 +1,21 @@
-using PureKLU
-using Aqua
+using SciMLTesting, PureKLU, Test
 using JET
-using Test
 
-@testset "Aqua" begin
-    Aqua.test_all(PureKLU; stale_deps = false, deps_compat = false)
-    # Genuine Aqua findings, marked broken pending fix — see
-    # https://github.com/SciML/PureKLU.jl/issues/62
-    @test_broken false  # stale_deps: ForwardDiff declared in [deps] but unused — see https://github.com/SciML/PureKLU.jl/issues/62
-    @test_broken false  # deps_compat: missing [compat] for LinearAlgebra — see https://github.com/SciML/PureKLU.jl/issues/62
-    @test_broken false  # deps_compat: missing [compat] for extra Pkg — see https://github.com/SciML/PureKLU.jl/issues/62
-end
-
-@testset "JET" begin
-    @test_broken false  # JET: toplevel error at src/PureKLU.jl:27 — parens around (\) in `import Base` — see https://github.com/SciML/PureKLU.jl/issues/62
-end
+run_qa(
+    PureKLU;
+    explicit_imports = true,
+    ei_kwargs = (;
+        no_stale_explicit_imports = (;
+            # `@muladd` is imported from MuladdMacro but currently unused; kept as a
+            # deliberate dependency for future opt-in FMA (see src/Kernel.jl).
+            ignore = (Symbol("@muladd"),),
+        ),
+        all_qualified_accesses_are_public = (;
+            # Cross-package non-public names accessed qualified and needed:
+            #   AdjointFactorization / TransposeFactorization (LinearAlgebra) are
+            #     used under `isdefined` guards for cross-version compatibility.
+            #   RefValue (Base) is used as a struct field type.
+            ignore = (:AdjointFactorization, :TransposeFactorization, :RefValue),
+        ),
+    ),
+)
