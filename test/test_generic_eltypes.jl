@@ -234,3 +234,43 @@ end
         @test maximum(abs.(ForwardDiff.value.(Ad2 * x2 .- b_dual))) <= 1.0e-10
     end
 end
+
+# Mixed-type solve: a real (Float64) factorization backsolving a Dual RHS, via the
+# PureKLUForwardDiffExt `ldiv!`. The factor stays Float64 (A is *not* promoted) and the
+# duals ride through the back-substitution; this is the analogue of the existing
+# real-factor / Complex-RHS `ldiv!`. Also assert it is heap-allocation free after warmup
+# (the `n × (N+1)` real RHS reuses the factorization's `solve_scratch` buffer).
+@testset "Real factor \\ Dual RHS (PureKLUForwardDiffExt)" begin
+    for A0 in _matrices(Float64)
+        n = size(A0, 1)
+        K = PureKLU.klu(A0) # real Float64 factorization
+        for N in (1, 2, 4)
+            tag = :MixedDualRHS
+            DT = ForwardDiff.Dual{tag, Float64, N}
+            b = DT[
+                ForwardDiff.Dual{tag}(Float64(i), ntuple(k -> sin(i + k), N)...) for i in 1:n
+            ]
+            x = K \ b
+            @test eltype(x) === DT
+            @test eltype(getfield(K, :solve_scratch)) === Float64 # factor not promoted
+
+            # Reference: solve each channel (value + partials) with the Float64 factor.
+            xref_val = K \ ForwardDiff.value.(b)
+            @test maximum(abs.(ForwardDiff.value.(x) .- xref_val)) <= 1.0e-10
+            for k in 1:N
+                xref_pk = K \ [ForwardDiff.partials(b[i], k) for i in 1:n]
+                @test maximum(abs.([ForwardDiff.partials(x[i], k) for i in 1:n] .- xref_pk)) <= 1.0e-10
+            end
+
+            # Allocation-free after warmup (buffer lives on the factorization).
+            solve_loop(K, x, reps) = (
+                for _ in 1:reps
+                    LinearAlgebra.ldiv!(K, x)
+                end
+            )
+            solve_loop(K, copy(b), 3) # warmup sizes the scratch
+            xb = copy(b)
+            @test (@allocated solve_loop(K, xb, 50)) == 0
+        end
+    end
+end
