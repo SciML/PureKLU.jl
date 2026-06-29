@@ -124,6 +124,13 @@ mutable struct KLUFactorization{Tv, Ti <: Integer, Tr <: Real} <: AbstractKLUFac
     colptr::Vector{Ti}    # 0-based
     rowval::Vector{Ti}    # 0-based
     nzval::Vector{Tv}
+    # Reusable real-valued multi-RHS scratch for mixed-type solves (a primal
+    # factor backsolving a Complex or Dual RHS decomposes into real channels).
+    # Stored as a plain `Matrix` so it can be handed to `solve!` without a
+    # `view`/`reshape` wrapper, and reallocated only when the column count
+    # changes, so those paths are heap-allocation free after warmup. `0×0`
+    # until first such solve; `Tr === real(Tv)`.
+    solve_scratch::Matrix{Tr}
 
     function KLUFactorization(
             n::Integer, colptr::Vector{Ti}, rowval::Vector{Ti},
@@ -133,7 +140,9 @@ mutable struct KLUFactorization{Tv, Ti <: Integer, Tr <: Real} <: AbstractKLUFac
         common = KLUCommon{Ti}()
         sym = KLUSymbolic{Ti}()
         num = KLUNumeric{Tv, Ti, Tr}()
-        return new{Tv, Ti, Tr}(common, sym, num, Int(n), colptr, rowval, nzval)
+        return new{Tv, Ti, Tr}(
+            common, sym, num, Int(n), colptr, rowval, nzval, Matrix{Tr}(undef, 0, 0)
+        )
     end
 end
 
