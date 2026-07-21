@@ -4,7 +4,6 @@ using JET
 run_qa(
     PureKLU;
     explicit_imports = true,
-    api_docs_kwargs = (; rendered = true),
     ei_kwargs = (;
         no_stale_explicit_imports = (;
             # `@muladd` is imported from MuladdMacro but currently unused; kept as a
