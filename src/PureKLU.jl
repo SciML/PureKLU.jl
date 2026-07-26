@@ -15,8 +15,7 @@ ordering is currently approximated by natural ordering; blocks of size
 module PureKLU
 
 using SparseArrays: SparseArrays, SparseMatrixCSC
-using LinearAlgebra: LinearAlgebra, Adjoint, Transpose
-using MuladdMacro: @muladd  # kept for future opt-in FMA; see src/Kernel.jl
+using LinearAlgebra: LinearAlgebra
 # The bare `PrecompileTools` name must stay in scope: the
 # `@setup_workload`/`@compile_workload` macro expansion in PrecompileTools 1.0.x
 # references it directly, so importing the macros without the module name breaks
@@ -27,7 +26,6 @@ import Base: size, getproperty, setproperty!, show
 
 export klu, klu!
 export klu_factor!, klu_refactor!, klu_analyze!, solve!
-export nonzeros
 
 include("Common.jl")
 include("BTF.jl")
@@ -43,9 +41,6 @@ const klu_symbolic = KLUSymbolic{Int32}
 const klu_l_symbolic = KLUSymbolic{Int64}
 const klu_numeric = KLUNumeric{Float64, Int32, Float64}
 const klu_l_numeric = KLUNumeric{Float64, Int64, Float64}
-
-const AdjointFact = isdefined(LinearAlgebra, :AdjointFactorization) ? LinearAlgebra.AdjointFactorization : Adjoint
-const TransposeFact = isdefined(LinearAlgebra, :TransposeFactorization) ? LinearAlgebra.TransposeFactorization : Transpose
 
 # `KLUTypes` is the legacy KLU.jl alias; `klu(...)` actually dispatches
 # on `KLUGenericTypes`, which is broad enough to cover `ForwardDiff.Dual`
@@ -103,14 +98,58 @@ end
 
 kluerror(common::KLUCommon) = kluerror(common.status)
 
+"""
+    AbstractKLUFactorization{Tv, Ti} <: LinearAlgebra.Factorization{Tv}
+
+Internal implementation supertype for PureKLU factorization objects.
+
+# Interface Rules
+This is not an extension interface. Its methods depend on the storage and state
+invariants of [`KLUFactorization`](@ref), so downstream packages must not subtype
+it. Use the public `LinearAlgebra.Factorization` interface instead: construct a
+factorization with [`klu`](@ref), then use `\\`, `LinearAlgebra.ldiv!`, `size`,
+`eltype`, `nnz`, `nonzeros`, `adjoint`, and `transpose`.
+"""
 abstract type AbstractKLUFactorization{Tv, Ti} <: LinearAlgebra.Factorization{Tv} end
 
 """
-    KLUFactorization{Tv, Ti}
+    KLUFactorization{Tv, Ti, Tr} <: LinearAlgebra.Factorization{Tv}
 
-Matrix factorization type for KLU. Constructed by [`klu`](@ref).
-Mirrors the field names of `KLU.jl`'s `KLUFactorization` so the same
-property accessors (`F.L`, `F.U`, `F.F`, `F.p`, `F.q`, `F.Rs`, …) work.
+The factorization returned by [`klu`](@ref). It implements the generic
+`LinearAlgebra.Factorization` interface: use `F \\ b` or
+`LinearAlgebra.ldiv!(F, b)` to solve a system, `size(F)` to inspect its shape,
+and `LinearAlgebra.issuccess(F)` to check its factorization status.
+
+# Fields
+- `common`: KLU options and factorization statistics.
+- `symbolic`: symbolic analysis, available after `klu_analyze!`.
+- `numeric`: numeric factors, available after `klu_factor!`.
+- `n`: matrix dimension.
+- `colptr`, `rowval`, `nzval`: the factorized matrix's internal CSC storage.
+- `solve_scratch`: reusable workspace for mixed-element-type solves.
+
+# Interface Rules
+`KLUFactorization` is produced by `klu` or its constructor. Its fields are
+implementation details except for the documented KLU-compatible property
+accessors (`L`, `U`, `F`, `p`, `q`, `R`, and `Rs`). Do not subtype
+`AbstractKLUFactorization` or mutate storage fields directly; use
+[`klu_analyze!`](@ref), [`klu_factor!`](@ref), and [`klu!`](@ref) to advance or
+reuse a factorization.
+
+# Examples
+```julia
+julia> using PureKLU, SparseArrays, LinearAlgebra
+
+julia> F = klu(sparse([2.0 1.0; 1.0 3.0]));
+
+julia> F \\ [1.0, 2.0]
+2-element Vector{Float64}:
+ 0.2
+ 0.6
+
+julia> issuccess(F)
+true
+```
 """
 mutable struct KLUFactorization{Tv, Ti <: Integer, Tr <: Real} <: AbstractKLUFactorization{Tv, Ti}
     common::KLUCommon{Ti}
@@ -164,13 +203,51 @@ function size(K::AbstractKLUFactorization, dim::Integer)
 end
 
 nnz(K::AbstractKLUFactorization) = K.lnz + K.unz + K.nzoff
-"""The nonzeros of the factorization `K`."""
+"""
+    nonzeros(K::AbstractKLUFactorization) -> Vector
+
+Return the stored numerical values of the sparse matrix represented by `K`.
+This extends `SparseArrays.nonzeros`; the returned vector aliases the
+factorization's matrix-value storage.
+
+# Arguments
+- `K`: a factorization returned by [`klu`](@ref).
+
+# Returns
+- The mutable value vector used by `K`.
+
+# Examples
+```julia
+julia> using PureKLU, SparseArrays
+
+julia> F = klu(sparse([2.0 0.0; 0.0 3.0]));
+
+julia> nonzeros(F)
+2-element Vector{Float64}:
+ 2.0
+ 3.0
+```
+"""
 nonzeros(K::AbstractKLUFactorization) = K.nzval
 
-if !isdefined(LinearAlgebra, :AdjointFactorization)
-    Base.adjoint(K::AbstractKLUFactorization) = Adjoint(K)
+struct KLUAdjointFactorization{Tv, F <: AbstractKLUFactorization{Tv}} <:
+    LinearAlgebra.Factorization{Tv}
+    parent::F
 end
-Base.transpose(K::AbstractKLUFactorization) = TransposeFact(K)
+
+struct KLUTransposeFactorization{Tv, F <: AbstractKLUFactorization{Tv}} <:
+    LinearAlgebra.Factorization{Tv}
+    parent::F
+end
+
+Base.parent(K::Union{KLUAdjointFactorization, KLUTransposeFactorization}) = K.parent
+Base.size(K::Union{KLUAdjointFactorization, KLUTransposeFactorization}) = size(parent(K))
+Base.size(K::Union{KLUAdjointFactorization, KLUTransposeFactorization}, dim::Integer) =
+    size(parent(K), dim)
+Base.adjoint(K::AbstractKLUFactorization{Tv}) where {Tv} = KLUAdjointFactorization{Tv, typeof(K)}(K)
+Base.transpose(K::AbstractKLUFactorization{Tv}) where {Tv} = KLUTransposeFactorization{Tv, typeof(K)}(K)
+Base.adjoint(K::KLUAdjointFactorization) = parent(K)
+Base.transpose(K::KLUTransposeFactorization) = parent(K)
 
 # --- analyze / factor / refactor entry points -----------------------------
 
@@ -181,9 +258,31 @@ _is_factored(K::KLUFactorization) = getfield(K, :numeric).n != 0
     klu_analyze!(K) -> K
     klu_analyze!(K, P, Q) -> K
 
-Run the symbolic analysis (BTF + per-block ordering) on `K`, storing the
-result in `K.symbolic`. Subsequent factorisations reuse it. The two-arg
-form accepts user-supplied row/column permutations.
+Run the symbolic analysis (BTF plus per-block ordering) on `K`, storing the
+result in `K.symbolic`. Subsequent factorisations reuse it. The three-argument
+form accepts user-supplied row and column permutations.
+
+# Arguments
+- `K`: an unfactored `KLUFactorization` with a square sparse-matrix pattern.
+- `P`: optional row permutation using the factorization index type.
+- `Q`: optional column permutation using the factorization index type.
+
+# Keyword Arguments
+- `check = true`: throw for hard KLU errors. A numerical singularity is stored
+  in `K.common.status` and does not throw.
+
+# Returns
+- `K`, with its symbolic analysis populated.
+
+# Examples
+```julia
+julia > using PureKLU, SparseArrays
+
+julia > F = PureKLU.KLUFactorization(sparse([2.0 1.0; 1.0 3.0]));
+
+julia > klu_analyze!(F) === F
+true
+```
 """
 function klu_analyze!(K::KLUFactorization{Tv, Ti}; check::Bool = true) where {Tv, Ti}
     _is_analyzed(K) && return K
@@ -211,10 +310,34 @@ function klu_analyze!(
 end
 
 """
-    klu_factor!(K; check=true, allowsingular=false) -> K
+    klu_factor!(K; check = true, allowsingular = false) -> K
 
-Numeric factorisation. Runs `klu_analyze!` first if it hasn't already
-been done. Mirrors `KLU.jl::klu_factor!`.
+Compute the numeric factorization of `K`. Runs [`klu_analyze!`](@ref) first
+when necessary, so it can be called directly on a newly constructed factor.
+
+# Arguments
+- `K`: a `KLUFactorization` whose sparse matrix values should be factored.
+
+# Keyword Arguments
+- `check = true`: throw for hard KLU errors. Numerical singularity is reported
+  through `K.common.status`, not an exception.
+- `allowsingular = false`: let KLU continue past a numerical singularity.
+
+# Returns
+- `K`, with numeric factors populated or its status set to a numerical
+  singularity.
+
+# Examples
+```julia
+julia> using PureKLU, SparseArrays, LinearAlgebra
+
+julia> F = PureKLU.KLUFactorization(sparse([2.0 1.0; 1.0 3.0]));
+
+julia> ldiv!(klu_factor!(F), [1.0, 2.0])
+2-element Vector{Float64}:
+ 0.2
+ 0.6
+```
 """
 function klu_factor!(
         K::KLUFactorization{Tv, Ti}; check::Bool = true,
@@ -254,15 +377,37 @@ function klu_factor!(
 end
 
 """
-    klu!(K::KLUFactorization, nzval::Vector; check=true, allowsingular=false) -> K
-    klu!(K::KLUFactorization, S::SparseMatrixCSC; check=true, allowsingular=false) -> K
+    klu!(K::KLUFactorization, nzval::Vector; check = true, allowsingular = false) -> K
+    klu!(K::KLUFactorization, S::SparseMatrixCSC; check = true, allowsingular = false) -> K
 
-Refactor an already-factored `K` in place with new numeric values that share its
-existing sparsity pattern, reusing the symbolic analysis and preallocated numeric
-workspace. `K` must already have been factored (via [`klu`](@ref) or
-[`klu_factor!`](@ref)). New values are given either as a `nzval` vector matching the
-length of `K`'s stored values, or as a `SparseMatrixCSC` whose pattern matches `K`
-(a mismatched pattern throws). Mirrors `KLU.jl`'s `klu!`.
+Refactor an already-factored `K` in place with new numerical values sharing its
+existing sparsity pattern. This reuses the symbolic analysis and numeric
+workspace. `K` must have been factored by [`klu`](@ref) or
+[`klu_factor!`](@ref). Supply either a value vector matching the stored values or
+a `SparseMatrixCSC` with exactly the same pattern.
+
+# Arguments
+- `K`: an already-factored `KLUFactorization`.
+- `nzval`: replacement sparse-matrix values, in CSC storage order.
+- `S`: a sparse matrix with the same dimensions and CSC sparsity pattern as `K`.
+
+# Keyword Arguments
+- `check = true`: throw for hard KLU errors. Numerical singularity remains a
+  status on `K.common`.
+- `allowsingular = false`: let KLU continue past a numerical singularity.
+
+# Returns
+- `K`, mutated to contain factors for the replacement values.
+
+# Examples
+```julia
+julia > using PureKLU, SparseArrays
+
+julia > F = klu(sparse([2.0 0.0; 0.0 3.0]));
+
+julia > klu!(F, [4.0, 6.0]) === F
+true
+```
 """
 function klu!(
         K::KLUFactorization{Tv, Ti}, nzval::Vector{Tv};
@@ -305,11 +450,31 @@ function klu!(
 end
 
 """
-    klu_refactor!(K, vals; check=true, allowsingular=false) -> K
+    klu_refactor!(K, vals; check = true, allowsingular = false) -> K
 
-Alias for [`klu!`](@ref): refactor an existing factorization in place with new
-numeric values that share the original sparsity pattern. Provided for naming
-parity with the analyze/factor/refactor entry points.
+Alias for [`klu!`](@ref), provided for naming parity with
+[`klu_analyze!`](@ref) and [`klu_factor!`](@ref).
+
+# Arguments
+- `K`: an already-factored `KLUFactorization`.
+- `values`: a replacement value vector or sparse matrix with the original
+  sparsity pattern.
+
+# Keyword Arguments
+Accepts the `check` and `allowsingular` keywords of [`klu!`](@ref).
+
+# Returns
+- The mutated factorization `K`.
+
+# Examples
+```julia
+julia > using PureKLU, SparseArrays
+
+julia > F = klu(sparse([2.0 0.0; 0.0 3.0]));
+
+julia > klu_refactor!(F, [4.0, 6.0]) === F
+true
+```
 """
 klu_refactor!(args...; kwargs...) = klu!(args...; kwargs...)
 
@@ -325,7 +490,39 @@ klu_refactor!(args...; kwargs...) = klu!(args...; kwargs...)
     klu(A; check=true, allowsingular=false, full_factor=true) -> K
     klu(n, colptr, rowval, nzval; ...) -> K
 
-Compute the LU factorisation of a sparse matrix using KLU.
+Compute a KLU sparse LU factorization.
+
+# Arguments
+- `A`: a square `SparseMatrixCSC` with real or complex values.
+- `n`: square-matrix dimension for the low-level CSC-storage form.
+- `colptr`, `rowval`, `nzval`: zero-based CSC storage arrays for the low-level
+  form. Their element types must be supported KLU index and number types.
+
+# Keyword Arguments
+- `check = true`: throw for hard KLU errors. Numerical singularity is recorded
+  in `F.common.status` and does not throw.
+- `allowsingular = false`: let KLU complete a numerical-singularity factorization.
+- `full_factor = true`: when false, only perform symbolic analysis.
+- `use_fma = true`: use fused multiply-add operations. Pass `false` for
+  bit-for-bit SuiteSparse KLU compatibility.
+- `fully_preallocated = nothing`: select automatic workspace preallocation;
+  pass `true` or `false` to override it.
+- `detect_banded = true`: detect narrow BTF blocks and use natural ordering.
+
+# Returns
+- A `KLUFactorization` that implements `LinearAlgebra.Factorization`.
+
+# Examples
+```julia
+julia> using PureKLU, SparseArrays
+
+julia> F = klu(sparse([2.0 1.0; 1.0 3.0]));
+
+julia> F \\ [1.0, 2.0]
+2-element Vector{Float64}:
+ 0.2
+ 0.6
+```
 """
 function klu(
         n::Integer, colptr::Vector{Ti}, rowval::Vector{Ti}, nzval::Vector{Tv};
@@ -363,9 +560,39 @@ end
 # --- solve API -------------------------------------------------------------
 
 """
-    solve!(K, B; check=true) -> B
+    solve!(K, B; check = true) -> B
 
-In-place solve. `B` is overwritten with the solution.
+Solve a factored linear system in place, overwriting `B` with the solution.
+The adjoint and transpose factorization wrappers (`F'` and `transpose(F)`) solve
+the corresponding adjoint and transpose systems.
+
+# Arguments
+- `K`: a factorization returned by [`klu`](@ref), or its adjoint/transpose
+  wrapper. An analyzed but unfactored factorization is factored first.
+- `B`: a strided vector or matrix whose leading dimension equals `size(K, 1)`.
+  It is overwritten with the solution.
+
+# Keyword Arguments
+- `check = true`: throw for hard KLU errors. Numerical singularity remains a
+  status on the factorization.
+
+# Returns
+- The same array `B` after replacement by the solution.
+
+# Examples
+```julia
+julia> using PureKLU, SparseArrays
+
+julia> F = klu(sparse([2.0 1.0; 1.0 3.0])); b = [1.0, 2.0];
+
+julia> solve!(F, b) === b
+true
+
+julia> b
+2-element Vector{Float64}:
+ 0.2
+ 0.6
+```
 """
 function solve!(
         K::AbstractKLUFactorization{Tv, Ti}, B::StridedVecOrMat{Tv};
@@ -385,7 +612,7 @@ function solve!(
 end
 
 function solve!(
-        K::AdjointFact{Tv, KF}, B::StridedVecOrMat{Tv};
+        K::KLUAdjointFactorization{Tv, KF}, B::StridedVecOrMat{Tv};
         check::Bool = true
     ) where {Tv, Ti, KF <: AbstractKLUFactorization{Tv, Ti}}
     parent_K = parent(K)
@@ -404,7 +631,7 @@ function solve!(
 end
 
 function solve!(
-        K::TransposeFact{Tv, KF}, B::StridedVecOrMat{Tv};
+        K::KLUTransposeFactorization{Tv, KF}, B::StridedVecOrMat{Tv};
         check::Bool = true
     ) where {Tv, Ti, KF <: AbstractKLUFactorization{Tv, Ti}}
     parent_K = parent(K)
@@ -424,9 +651,16 @@ end
 
 solve(K, B; check::Bool = true) = solve!(K, copy(B); check)
 
+function Base.:(\)(
+        K::Union{KLUAdjointFactorization{Tv, KF}, KLUTransposeFactorization{Tv, KF}},
+        B::StridedVecOrMat{Tv}
+    ) where {Tv, Ti, KF <: AbstractKLUFactorization{Tv, Ti}}
+    return solve(K, B)
+end
+
 LinearAlgebra.ldiv!(K::AbstractKLUFactorization{Tv}, B::StridedVecOrMat{Tv}) where {Tv} =
     solve!(K, B)
-LinearAlgebra.ldiv!(K::Union{AdjointFact{Tv, KF}, TransposeFact{Tv, KF}}, B::StridedVecOrMat{Tv}) where {Tv, Ti, KF <: AbstractKLUFactorization{Tv, Ti}} =
+LinearAlgebra.ldiv!(K::Union{KLUAdjointFactorization{Tv, KF}, KLUTransposeFactorization{Tv, KF}}, B::StridedVecOrMat{Tv}) where {Tv, Ti, KF <: AbstractKLUFactorization{Tv, Ti}} =
     solve!(K, B)
 function LinearAlgebra.ldiv!(
         K::AbstractKLUFactorization{<:AbstractFloat},
@@ -437,7 +671,7 @@ function LinearAlgebra.ldiv!(
     return map!(complex, B, realX, imagX)
 end
 function LinearAlgebra.ldiv!(
-        K::Union{AdjointFact{Tv, KF}, TransposeFact{Tv, KF}},
+        K::Union{KLUAdjointFactorization{Tv, KF}, KLUTransposeFactorization{Tv, KF}},
         B::StridedVecOrMat{<:Complex}
     ) where {Tv <: AbstractFloat, Ti, KF <: AbstractKLUFactorization{Tv, Ti}}
     imagX = solve(K, imag(B))

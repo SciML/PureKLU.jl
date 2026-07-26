@@ -8,6 +8,17 @@ klu_analyze!
 klu_factor!
 ```
 
+`klu` returns a `LinearAlgebra.Factorization`. Use the generic
+`F \\ b`, `LinearAlgebra.ldiv!(F, b)`, `size(F)`, and
+`LinearAlgebra.issuccess(F)` interfaces rather than relying on factorization
+storage. The documented KLU-compatible properties (`L`, `U`, `F`, `p`, `q`,
+`R`, and `Rs`) are available after the appropriate analysis or factorization
+phase.
+
+```@docs
+PureKLU.KLUFactorization
+```
+
 ## In-place refactorization
 
 ```@docs
@@ -21,10 +32,10 @@ klu_refactor!
 solve!
 ```
 
-## Accessors
+## SparseArrays integration
 
 ```@docs
-nonzeros(::PureKLU.AbstractKLUFactorization)
+SparseArrays.nonzeros(::PureKLU.AbstractKLUFactorization)
 ```
 
 ## Internals

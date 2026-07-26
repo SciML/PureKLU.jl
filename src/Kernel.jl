@@ -99,6 +99,16 @@ end
     end
 end
 
+mutable struct FirstRowRef
+    value::Int
+end
+
+@inline Base.getindex(ref::FirstRowRef) = ref.value
+@inline function Base.setindex!(ref::FirstRowRef, value::Int)
+    ref.value = value
+    return value
+end
+
 """
     KernelWorkspace{Tv, Ti}
 
@@ -113,7 +123,7 @@ mutable struct KernelWorkspace{Tv, Ti}
     Lpend::Vector{Ti}
     Ap_pos::Vector{Ti}
     X::Vector{Tv}
-    firstrow_ref::Base.RefValue{Int}
+    firstrow_ref::FirstRowRef
 end
 
 # `X` is fully re-zeroed at the top of every `klu_kernel!` call
@@ -130,7 +140,7 @@ KernelWorkspace{Tv, Ti}(n::Integer) where {Tv, Ti} = KernelWorkspace{Tv, Ti}(
     Vector{Ti}(undef, n),
     Vector{Ti}(undef, n),
     Vector{Tv}(undef, n),
-    Ref(0),
+    FirstRowRef(0),
 )
 
 """
@@ -287,7 +297,7 @@ function _alloc_numeric(
         Vector{Ti}(undef, maxblock),
         Vector{Ti}(undef, maxblock),
         Xwork,
-        Ref(0),
+        FirstRowRef(0),
     )
     @inbounds for b in 1:nblocks
         k1 = Int(Sym.R[b]); k2 = Int(Sym.R[b + 1])
@@ -793,7 +803,7 @@ end
         tol::Float64, X::Vector{Tv},
         block_Li::Vector{Ti}, block_Lx::Vector{Tv},
         Lip::Vector{Ti}, Llen::Vector{Ti},
-        Pinv::Vector{Ti}, firstrow_ref::Base.RefValue{Int},
+        Pinv::Vector{Ti}, firstrow_ref::FirstRowRef,
         common::KLUCommon{Ti}, k1::Int, fma_val::Val
     ) where {Tv, Ti}
     Tr = _real_eltype(Tv)
@@ -1168,7 +1178,7 @@ function klu_kernel!(
 end
 
 """
-    klu_factor!(Sym, Ap, Ai, Ax, common; allowsingular=false) -> KLUNumeric
+    klu_factor!(Sym, Ap, Ai, Ax, common; allowsingular = false) -> KLUNumeric
 
 Top-level numeric factorisation. Builds a `KLUNumeric`, scales the input
 if requested and dispatches each BTF block either to a singleton path or
