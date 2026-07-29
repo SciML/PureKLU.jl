@@ -5,4 +5,4 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
 [compat]
 Documenter = "1"
-PureKLU = "2"
+PureKLU = "1.2"
