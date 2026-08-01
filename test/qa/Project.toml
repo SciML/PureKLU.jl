@@ -1,5 +1,6 @@
 [deps]
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
 PureKLU = "0c0d3e7f-3a8b-4f7e-b6f1-9a4d2e7c1f01"
 SciMLTesting = "09d9d899-5365-40a9-917a-5f67fddea283"
@@ -7,6 +8,7 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
 Aqua = "0.8"
+ForwardDiff = "1"
 JET = "0.9,0.10,0.11"
 SciMLTesting = "2.4"
 Test = "1"

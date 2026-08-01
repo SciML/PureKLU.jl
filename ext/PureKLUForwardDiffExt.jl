@@ -1,6 +1,6 @@
 module PureKLUForwardDiffExt
 
-using PureKLU: PureKLU, AbstractKLUFactorization, KLUFactorization, solve!
+using PureKLU: PureKLU, KLUFactorization, solve!
 using LinearAlgebra: LinearAlgebra
 using ForwardDiff: ForwardDiff, Dual, Partials
 
