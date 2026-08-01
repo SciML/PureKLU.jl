@@ -1,8 +1,14 @@
-using SciMLTesting, PureKLU
+using SciMLTesting, PureKLU, Test
 
 # ExplicitImports only sees an extension module once its trigger package is loaded, so the
 # weakdep has to be loaded here for `PureKLUForwardDiffExt` to be scanned at all.
 using ForwardDiff
+
+# ExplicitImports silently skips an extension that fails to load, so assert the
+# extension modules actually exist rather than trusting a green run_qa.
+@testset "Extensions loaded" begin
+    @test Base.get_extension(PureKLU, :PureKLUForwardDiffExt) !== nothing
+end
 
 # ForwardDiff declares no name `public` and exports none of its dual-number interface, so
 # the only spelling available for the types and accessors an AD extension must use is the
