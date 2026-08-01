@@ -4,5 +4,6 @@
 /Manifest.toml
 benchmark/Manifest.toml
 docs/Manifest.toml
+test/qa/Manifest.toml
 docs/build/
 /results.txt

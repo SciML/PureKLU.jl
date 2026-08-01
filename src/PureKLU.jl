@@ -27,6 +27,13 @@ import Base: size, getproperty, setproperty!, show
 export klu, klu!
 export klu_factor!, klu_refactor!, klu_analyze!, solve!
 
+# `KLUFactorization` is documented API (it is what `klu` returns and what downstream
+# packages dispatch on) but stays unexported because KLU.jl exports the same name.
+# `public` requires Julia >= 1.11; on the 1.10 LTS this is a no-op.
+@static if VERSION >= v"1.11"
+    eval(Meta.parse("public KLUFactorization"))
+end
+
 include("Common.jl")
 include("BTF.jl")
 include("AMD.jl")
