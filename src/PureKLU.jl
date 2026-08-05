@@ -515,6 +515,10 @@ Compute a KLU sparse LU factorization.
 - `fully_preallocated = nothing`: select automatic workspace preallocation;
   pass `true` or `false` to override it.
 - `detect_banded = true`: detect narrow BTF blocks and use natural ordering.
+- `tol = 0.001`: Pivot on a column's diagonal instead of largest entry if it is
+  at least `tol` times larger in magnitude. Set `tol = 1.0` for partial pivoting,
+  and `tol = 0.0` to always use the diagonal. Only applies to the numeric
+  factorization; `klu!` reuses the existing pivot ordering.
 
 # Returns
 - A `KLUFactorization` that implements `LinearAlgebra.Factorization`.
@@ -536,11 +540,12 @@ function klu(
         check::Bool = true, allowsingular::Bool = false,
         full_factor::Bool = true, use_fma = true,
         fully_preallocated::Union{Bool, Nothing} = nothing,
-        detect_banded::Bool = true,
+        detect_banded::Bool = true, tol::Float64 = 0.001,
     ) where {Ti <: KLUITypes, Tv <: KLUGenericTypes}
     K = KLUFactorization(n, colptr, rowval, nzval)
     K.common.use_fma = _as_val(use_fma)
     K.common.detect_banded = detect_banded
+    K.common.tol = tol
     if fully_preallocated isa Bool
         K.common.fully_preallocated = fully_preallocated
         return full_factor ? klu_factor!(K; check, allowsingular) : klu_analyze!(K; check)
@@ -554,13 +559,14 @@ function klu(
         A::SparseMatrixCSC{Tv, Ti}; check::Bool = true,
         allowsingular::Bool = false, full_factor::Bool = true,
         use_fma = true, fully_preallocated::Union{Bool, Nothing} = nothing,
-        detect_banded::Bool = true,
+        detect_banded::Bool = true, tol::Float64 = 0.001,
     ) where {Tv <: KLUGenericTypes, Ti <: KLUITypes}
     n = size(A, 1)
     n == size(A, 2) || throw(DimensionMismatch())
     return klu(
         n, decrement(A.colptr), decrement(A.rowval), A.nzval;
-        check, allowsingular, full_factor, use_fma, fully_preallocated, detect_banded
+        check, allowsingular, full_factor, use_fma, fully_preallocated,
+        detect_banded, tol
     )
 end
 
