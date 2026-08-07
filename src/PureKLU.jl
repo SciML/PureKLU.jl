@@ -31,7 +31,7 @@ export klu_factor!, klu_refactor!, klu_analyze!, solve!
 # packages dispatch on) but stays unexported because KLU.jl exports the same name.
 # `public` requires Julia >= 1.11; on the 1.10 LTS this is a no-op.
 @static if VERSION >= v"1.11"
-    eval(Meta.parse("public KLUFactorization"))
+    include_string(@__MODULE__, "public KLUFactorization")
 end
 
 include("Common.jl")
