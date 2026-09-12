@@ -48,3 +48,12 @@ PureKLU.BTF
 PureKLU.AMD
 PureKLU.AMD.amd_order!
 ```
+
+## Updating values with new numerical pivots
+
+`klu!(factor, values; reuse_pivots = false)` accepts a vector of replacement CSC
+values or a sparse matrix with the same pattern. It retains symbolic analysis and
+numeric workspace while selecting numerical pivots again. Use this option when
+changing matrix values can make the old pivots unstable. With the default
+`reuse_pivots = true`, the caller remains responsible for checking the accuracy of
+refactorization, as described in the [KLU user guide](https://github.com/DrTimothyAldenDavis/SuiteSparse/blob/dev/KLU/Doc/KLU_UserGuide.tex).
