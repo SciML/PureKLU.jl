@@ -1,7 +1,8 @@
 using PureKLU, SparseArrays, LinearAlgebra, Test
 
 @testset "New pivots with a retained symbolic analysis" begin
-    for T in (Float64, ComplexF64), Ti in (Int32, Int64), matrix_input in (false, true)
+    for T in (Float64, ComplexF64), Ti in Base.uniontypes(PureKLU.KLUITypes),
+            matrix_input in (false, true)
         A = SparseMatrixCSC{T, Ti}(sparse(T[1 1; 1 2]))
         factor = klu(A)
         expected = T[1, 2]
