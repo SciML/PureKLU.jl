@@ -384,14 +384,18 @@ function klu_factor!(
 end
 
 """
-    klu!(K::KLUFactorization, nzval::Vector; check = true, allowsingular = false) -> K
-    klu!(K::KLUFactorization, S::SparseMatrixCSC; check = true, allowsingular = false) -> K
+    klu!(K::KLUFactorization, nzval::Vector; check = true, allowsingular = false, reuse_pivots = true) -> K
+    klu!(K::KLUFactorization, S::SparseMatrixCSC; check = true, allowsingular = false, reuse_pivots = true) -> K
 
 Refactor an already-factored `K` in place with new numerical values sharing its
 existing sparsity pattern. This reuses the symbolic analysis and numeric
 workspace. `K` must have been factored by [`klu`](@ref) or
 [`klu_factor!`](@ref). Supply either a value vector matching the stored values or
 a `SparseMatrixCSC` with exactly the same pattern.
+
+The default retains the previous numerical pivots, which can become unstable as
+the matrix values change. Set `reuse_pivots = false` to select new pivots while
+retaining the symbolic analysis and reusable numeric workspace.
 
 # Arguments
 - `K`: an already-factored `KLUFactorization`.
@@ -418,11 +422,12 @@ true
 """
 function klu!(
         K::KLUFactorization{Tv, Ti}, nzval::Vector{Tv};
-        check::Bool = true, allowsingular::Bool = false
+        check::Bool = true, allowsingular::Bool = false, reuse_pivots::Bool = true
     ) where {Tv, Ti}
     length(nzval) != length(K.nzval) && throw(DimensionMismatch())
     _is_factored(K) || throw(ArgumentError("KLUFactorization has not been factored yet. Call `klu_factor!` first."))
     K.nzval = nzval
+    reuse_pivots || return klu_factor!(K; check, allowsingular)
     K.common.halt_if_singular = (!allowsingular && check) ? Cint(1) : Cint(0)
     klu_refactor!(
         getfield(K, :symbolic), getfield(K, :numeric),
@@ -439,21 +444,21 @@ end
 # Eltype-mismatched fallback: convert rather than throw.
 function klu!(
         K::KLUFactorization{Tv, Ti}, nzval::Vector{U};
-        check::Bool = true, allowsingular::Bool = false
+        check::Bool = true, allowsingular::Bool = false, reuse_pivots::Bool = true
     ) where {Tv, Ti, U}
-    return klu!(K, convert(Vector{Tv}, nzval); check, allowsingular)
+    return klu!(K, convert(Vector{Tv}, nzval); check, allowsingular, reuse_pivots)
 end
 
 function klu!(
         K::KLUFactorization{Tv, Ti}, S::SparseMatrixCSC;
-        check::Bool = true, allowsingular::Bool = false
+        check::Bool = true, allowsingular::Bool = false, reuse_pivots::Bool = true
     ) where {Tv, Ti}
     size(K) == size(S) || throw(ArgumentError("Sizes of K and S must match."))
     increment!(K.colptr); increment!(K.rowval)
     pattern_ok = K.colptr == S.colptr && K.rowval == S.rowval
     decrement!(K.colptr); decrement!(K.rowval)
     pattern_ok || throw(ArgumentError("The pattern of the original matrix must match the pattern of the refactor."))
-    return klu!(K, S.nzval; check, allowsingular)
+    return klu!(K, S.nzval; check, allowsingular, reuse_pivots)
 end
 
 """
