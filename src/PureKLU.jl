@@ -27,11 +27,12 @@ import Base: size, getproperty, setproperty!, show
 export klu, klu!
 export klu_factor!, klu_refactor!, klu_analyze!, solve!
 
-# `KLUFactorization` is documented API (it is what `klu` returns and what downstream
-# packages dispatch on) but stays unexported because KLU.jl exports the same name.
+# Documented API that stays unexported for KLU.jl parity: `KLUFactorization`
+# because KLU.jl exports that name itself, `rgrowth` because KLU.jl keeps its
+# own `rgrowth` unexported.
 # `public` requires Julia >= 1.11; on the 1.10 LTS this is a no-op.
 @static if VERSION >= v"1.11"
-    include_string(@__MODULE__, "public KLUFactorization")
+    include_string(@__MODULE__, "public KLUFactorization, rgrowth")
 end
 
 include("Common.jl")
@@ -910,6 +911,10 @@ function show(io::IO, mime::MIME{Symbol("text/plain")}, K::AbstractKLUFactorizat
         println(io, "Incomplete Factorization, please try `klu_factor!(K)`.")
     end
 end
+
+# Included here rather than beside the other `include`s: it dispatches on
+# `KLUFactorization`, which is defined above.
+include("Rgrowth.jl")
 
 # Precompile the four BLAS eltypes (Float64, Float32, ComplexF64, ComplexF32)
 # crossed with the standard index types (Int32, Int64). Generic Real / Complex
