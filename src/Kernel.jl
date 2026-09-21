@@ -202,6 +202,9 @@ mutable struct KLUNumeric{Tv, Ti <: Integer, Tr <: Real}
     Offx::Vector{Tv}
     nzoff::Ti
     Xwork::Vector{Tv}
+    # Lazy lane-major matrix-RHS workspace; private to this numeric factor.
+    # Reused across solves/refactors; every active lane is gathered before reading.
+    Xrhs::Matrix{Tv}
     # Allocated only when `common.scale > 0`; empty otherwise -- the
     # `Rs[k] = Rs[Pnum[k]]` shuffle at the tail of factor/refactor is
     # skipped entirely in the unscaled case.
@@ -228,7 +231,7 @@ KLUNumeric{Tv, Ti, Tr}() where {Tv, Ti <: Integer, Tr <: Real} = KLUNumeric{Tv, 
     Tv[], Tr[],
     Ti[], Ti[], Tv[],
     Ti(0),
-    Tv[], Tr[],
+    Tv[], Matrix{Tv}(undef, 0, 0), Tr[],
     KernelWorkspace{Tv, Ti}(0),
     Ti[],
 )
@@ -345,6 +348,7 @@ function _alloc_numeric(
         Vector{Tv}(undef, max(nzoff, 0)),
         Sym.nzoff,
         Xwork,
+        Matrix{Tv}(undef, 0, 0),
         scale > 0 ? Vector{Tr}(undef, n) : Tr[],
         wk,
         Vector{Ti}(undef, maxblock),
