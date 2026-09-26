@@ -94,3 +94,23 @@ end
         @test (K.common.numerical_rank, K.common.singular_col) == (rank, col)
     end
 end
+
+@testset "Matrix RHS workspace growth" begin
+    N = 40
+    T = spdiagm(-1 => -ones(N - 1), 0 => fill(2.0, N), 1 => -ones(N - 1))
+    E = spdiagm(0 => ones(N))
+    A = kron(E, T) + kron(T, E)
+    K = klu(A)
+    rng = MersenneTwister(715)
+    for (nrhs, capacity) in ((8, 8), (16, 16), (9, 16), (65, 64), (8, 64))
+        scratch = K.numeric.Xrhs
+        B = randn(rng, N^2, nrhs)
+        expected = column_solve!(K, copy(B))
+        @test solve!(K, B) == expected
+        @test size(K.numeric.Xrhs) == (capacity, N^2)
+        if size(scratch, 1) >= min(64, nrhs)
+            @test K.numeric.Xrhs === scratch
+        end
+        @test (@allocated solve!(K, B)) == 0
+    end
+end

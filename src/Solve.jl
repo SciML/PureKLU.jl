@@ -4,6 +4,10 @@
 # bit-for-bit, set `common.use_fma = false` (or pass `use_fma=false` to
 # `klu`/`klu_factor!`) -- see `Kernel.jl` for the full discussion.
 
+const _RHS_MIN_COLUMNS = 8
+const _RHS_TILE_WIDTH = 64
+const _RHS_TRANSFER_WIDTH = 16
+
 """
     klu_solve!(Sym, Num, B, common; conj_solve=false) -> B
 
@@ -41,12 +45,13 @@ function _klu_solve_impl!(
     nrhs = size(B, 2)
 
     # Keep small, generic and vector solves on the original scalar path.
-    if Tv <: Union{Float32, Float64} && B isa StridedMatrix{Tv} && nrhs >= 8
-        if size(Num.Xrhs) != (64, n)
-            Num.Xrhs = Matrix{Tv}(undef, 64, n)
+    if Tv <: Union{Float32, Float64} && B isa StridedMatrix{Tv} && nrhs >= _RHS_MIN_COLUMNS
+        width = min(_RHS_TILE_WIDTH, nrhs)
+        if size(Num.Xrhs, 2) != n || size(Num.Xrhs, 1) < width
+            Num.Xrhs = Matrix{Tv}(undef, width, n)
         end
-        for first_column in 1:64:nrhs
-            lanes = min(64, nrhs - first_column + 1)
+        for first_column in 1:width:nrhs
+            lanes = min(width, nrhs - first_column + 1)
             _klu_solve_tile!(Num.Xrhs, B, first_column, lanes, Sym, Num, fma_val)
         end
         if was_singular
@@ -143,7 +148,7 @@ end
 
 # RHS lanes are contiguous in X. Sparse coefficients/indices are loaded once
 # per tile, without changing the arithmetic order within any RHS. Transfers use
-# smaller subtiles to limit the number of strided B columns touched at once.
+# smaller sub-blocks to limit the number of strided B columns touched at once.
 @inline function _submul_lanes!(X, target, source, coefficient, lanes, fma_val::Val)
     @inbounds @simd for lane in 1:lanes
         X[lane, target] = _mulsub(X[lane, target], coefficient, X[lane, source], fma_val)
@@ -175,9 +180,9 @@ function _klu_solve_tile!(
 
     @inbounds begin
         # X = P * (R \ B), with Pnum zero-based as in the upstream kernel.
-        for first_lane in 1:16:lanes, k in 0:(n - 1)
+        for first_lane in 1:_RHS_TRANSFER_WIDTH:lanes, k in 0:(n - 1)
             source_row = Int(Pnum[k + 1]) + 1
-            @simd for lane in first_lane:min(first_lane + 15, lanes)
+            @simd for lane in first_lane:min(first_lane + _RHS_TRANSFER_WIDTH - 1, lanes)
                 X[lane, k + 1] = B[source_row, first_column + lane - 1]
             end
         end
@@ -244,9 +249,9 @@ function _klu_solve_tile!(
 
         # Scatter X = Q*x back into the caller's RHS.  The lane loop remains
         # contiguous in X even when B has a larger column stride.
-        for first_lane in 1:16:lanes, k in 0:(n - 1)
+        for first_lane in 1:_RHS_TRANSFER_WIDTH:lanes, k in 0:(n - 1)
             destination_row = Int(Q[k + 1]) + 1
-            @simd for lane in first_lane:min(first_lane + 15, lanes)
+            @simd for lane in first_lane:min(first_lane + _RHS_TRANSFER_WIDTH - 1, lanes)
                 B[destination_row, first_column + lane - 1] = X[lane, k + 1]
             end
         end

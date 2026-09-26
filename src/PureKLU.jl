@@ -589,6 +589,12 @@ the corresponding adjoint and transpose systems.
 - `check = true`: throw for hard KLU errors. Numerical singularity remains a
   status on the factorization.
 
+# Workspace
+Real `Float32`/`Float64` matrix solves with at least eight RHS lazily allocate
+`n * min(64, nrhs)` elements of scratch. The workspace grows for wider solves
+(up to 64 columns), is retained across solves and refactorizations, and is reused
+without allocation while its capacity suffices. Smaller RHS do not shrink it.
+
 # Returns
 - The same array `B` after replacement by the solution.
 
