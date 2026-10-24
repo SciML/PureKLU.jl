@@ -100,7 +100,7 @@ function kluerror(status::KLUStatus)
     elseif status == KLU_TOO_LARGE
         throw(OverflowError("Integer overflow has occurred"))
     else
-        throw(ErrorException("Unknown KLU error code: $status"))
+        throw(ErrorException("Unknown KLU error code: $(Int(status))"))
     end
 end
 
