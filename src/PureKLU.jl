@@ -27,11 +27,12 @@ import Base: size, getproperty, setproperty!, show
 export klu, klu!
 export klu_factor!, klu_refactor!, klu_analyze!, solve!
 
-# `KLUFactorization` is documented API (it is what `klu` returns and what downstream
-# packages dispatch on) but stays unexported because KLU.jl exports the same name.
+# Documented API that stays unexported for KLU.jl parity: `KLUFactorization`
+# because KLU.jl exports that name itself, `rgrowth` because KLU.jl keeps its
+# own `rgrowth` unexported.
 # `public` requires Julia >= 1.11; on the 1.10 LTS this is a no-op.
 @static if VERSION >= v"1.11"
-    include_string(@__MODULE__, "public KLUFactorization")
+    include_string(@__MODULE__, "public KLUFactorization, rgrowth")
 end
 
 include("Common.jl")
@@ -384,14 +385,18 @@ function klu_factor!(
 end
 
 """
-    klu!(K::KLUFactorization, nzval::Vector; check = true, allowsingular = false) -> K
-    klu!(K::KLUFactorization, S::SparseMatrixCSC; check = true, allowsingular = false) -> K
+    klu!(K::KLUFactorization, nzval::Vector; check = true, allowsingular = false, reuse_pivots = true) -> K
+    klu!(K::KLUFactorization, S::SparseMatrixCSC; check = true, allowsingular = false, reuse_pivots = true) -> K
 
 Refactor an already-factored `K` in place with new numerical values sharing its
 existing sparsity pattern. This reuses the symbolic analysis and numeric
 workspace. `K` must have been factored by [`klu`](@ref) or
 [`klu_factor!`](@ref). Supply either a value vector matching the stored values or
 a `SparseMatrixCSC` with exactly the same pattern.
+
+The default retains the previous numerical pivots, which can become unstable as
+the matrix values change. Set `reuse_pivots = false` to select new pivots while
+retaining the symbolic analysis and reusable numeric workspace.
 
 # Arguments
 - `K`: an already-factored `KLUFactorization`.
@@ -418,11 +423,12 @@ true
 """
 function klu!(
         K::KLUFactorization{Tv, Ti}, nzval::Vector{Tv};
-        check::Bool = true, allowsingular::Bool = false
+        check::Bool = true, allowsingular::Bool = false, reuse_pivots::Bool = true
     ) where {Tv, Ti}
     length(nzval) != length(K.nzval) && throw(DimensionMismatch())
     _is_factored(K) || throw(ArgumentError("KLUFactorization has not been factored yet. Call `klu_factor!` first."))
     K.nzval = nzval
+    reuse_pivots || return klu_factor!(K; check, allowsingular)
     K.common.halt_if_singular = (!allowsingular && check) ? Cint(1) : Cint(0)
     klu_refactor!(
         getfield(K, :symbolic), getfield(K, :numeric),
@@ -439,21 +445,21 @@ end
 # Eltype-mismatched fallback: convert rather than throw.
 function klu!(
         K::KLUFactorization{Tv, Ti}, nzval::Vector{U};
-        check::Bool = true, allowsingular::Bool = false
+        check::Bool = true, allowsingular::Bool = false, reuse_pivots::Bool = true
     ) where {Tv, Ti, U}
-    return klu!(K, convert(Vector{Tv}, nzval); check, allowsingular)
+    return klu!(K, convert(Vector{Tv}, nzval); check, allowsingular, reuse_pivots)
 end
 
 function klu!(
         K::KLUFactorization{Tv, Ti}, S::SparseMatrixCSC;
-        check::Bool = true, allowsingular::Bool = false
+        check::Bool = true, allowsingular::Bool = false, reuse_pivots::Bool = true
     ) where {Tv, Ti}
     size(K) == size(S) || throw(ArgumentError("Sizes of K and S must match."))
     increment!(K.colptr); increment!(K.rowval)
     pattern_ok = K.colptr == S.colptr && K.rowval == S.rowval
     decrement!(K.colptr); decrement!(K.rowval)
     pattern_ok || throw(ArgumentError("The pattern of the original matrix must match the pattern of the refactor."))
-    return klu!(K, S.nzval; check, allowsingular)
+    return klu!(K, S.nzval; check, allowsingular, reuse_pivots)
 end
 
 """
@@ -911,6 +917,10 @@ function show(io::IO, mime::MIME{Symbol("text/plain")}, K::AbstractKLUFactorizat
         println(io, "Incomplete Factorization, please try `klu_factor!(K)`.")
     end
 end
+
+# Included here rather than beside the other `include`s: it dispatches on
+# `KLUFactorization`, which is defined above.
+include("Rgrowth.jl")
 
 # Precompile the four BLAS eltypes (Float64, Float32, ComplexF64, ComplexF32)
 # crossed with the standard index types (Int32, Int64). Generic Real / Complex

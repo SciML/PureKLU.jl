@@ -32,6 +32,12 @@ klu_refactor!
 solve!
 ```
 
+## Pivot growth
+
+```@docs
+PureKLU.rgrowth
+```
+
 ## SparseArrays integration
 
 ```@docs
@@ -48,3 +54,16 @@ PureKLU.BTF
 PureKLU.AMD
 PureKLU.AMD.amd_order!
 ```
+
+## Updating values with new numerical pivots
+
+`klu!(factor, values; reuse_pivots = false)` accepts a vector of replacement CSC
+values or a sparse matrix with the same pattern. It retains symbolic analysis and
+numeric workspace while selecting numerical pivots again. Use this option when
+changing matrix values can make the old pivots unstable. With the default
+`reuse_pivots = true`, the caller remains responsible for checking the accuracy of
+refactorization, as described in the [KLU user guide](https://github.com/DrTimothyAldenDavis/SuiteSparse/blob/dev/KLU/Doc/KLU_UserGuide.tex).
+[`PureKLU.rgrowth`](@ref) is that check: refactor with the pivots reused, and
+redo the factorization with `klu_factor!` only when the growth it reports says
+the old pivots have gone unstable. That keeps the cheap refactorization on the
+common path and pays for new pivots only when they are needed.
