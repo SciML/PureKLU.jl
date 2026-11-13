@@ -49,10 +49,11 @@ mutable struct KLUCommon{Ti <: Integer}
     # PureKLU-only: when `Val(true)` (default) the kernel hot loops compute
     # `a - b*c` via `muladd(-b, c, a)` so that LLVM emits a fused
     # multiply-add (FMA) on supported hardware. Faster and slightly more
-    # accurate, but the results differ from SuiteSparse's `libklu.so`
+    # accurate. On x86_64 the results differ from SuiteSparse's `libklu`
     # binary by up to 1 ULP (the binary is shipped SSE2-only, with no
-    # FMA instructions). Set to `Val(false)` to opt out and get bit-for-bit
-    # identical results to `KLU.jl`.
+    # FMA instructions); set to `Val(false)` there to get bit-for-bit
+    # identical results to `KLU.jl`. On aarch64 the `libklu` binary uses
+    # fused multiply-adds, so `Val(true)` is the bit-matching mode.
     #
     # Stored as `Union{Val{true},Val{false}}` so the kernel can dispatch
     # on it directly via a function barrier, giving each loop a fully
@@ -65,12 +66,12 @@ mutable struct KLUCommon{Ti <: Integer}
     # the direct `klu_factor!(K)` path uses whatever is set here (default
     # `false`).
     fully_preallocated::Bool
-    # Opt-in: when `true`, the analyze phase detects per-BTF-block narrow,
+    # When `true` (default), the analyze phase detects per-BTF-block narrow,
     # dense bands and orders them naturally (skipping AMD) -- a large analyze
-    # speedup for genuinely banded systems.  Default `false` keeps the AMD
-    # ordering, so the factorization stays bit-for-bit identical to SuiteSparse
-    # KLU (the natural ordering is equally valid and equal-fill, but its `Q`/L/U
-    # differ from AMD's, which would break the strict KLU-parity guarantee).
+    # speedup for genuinely banded systems.  `false` keeps the AMD ordering,
+    # so the factorization stays bit-for-bit identical to SuiteSparse KLU (the
+    # natural ordering is equally valid and equal-fill, but its `Q`/L/U differ
+    # from AMD's, which breaks the strict KLU-parity guarantee).
     detect_banded::Bool
 end
 

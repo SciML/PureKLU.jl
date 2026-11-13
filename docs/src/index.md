@@ -33,15 +33,17 @@ numeric values change (same sparsity pattern).
 
 ## Bit-for-bit equivalence with KLU.jl
 
-`klu(A; use_fma = Val(false))` reproduces `KLU.jl`'s results bit-for-bit for every
-field (`L`, `U`, `F`, `p`, `q`, `R`, `Rs`, solve and refactor output) on the general
-factorization. The default `use_fma = Val(true)` fuses the kernel's
+On x86_64, `klu(A; use_fma = Val(false))` reproduces `KLU.jl`'s results bit-for-bit
+for every field (`L`, `U`, `F`, `p`, `q`, `R`, `Rs`, solve and refactor output) on
+the general factorization. The default `use_fma = Val(true)` fuses the kernel's
 multiply-subtract loops into FMA instructions: same result up to one ULP, and
-faster on hardware with FMA.
+faster on hardware with FMA. On aarch64, `SuiteSparse_jll`'s `libklu` itself uses
+fused multiply-adds, so there the default `use_fma = Val(true)` is the
+bit-matching mode for real matrices.
 
 ```julia
 klu(A)                       # FMA on (default)
-klu(A; use_fma = false)      # SSE2-equivalent, bit-for-bit KLU.jl match
+klu(A; use_fma = false)      # SSE2-equivalent, bit-for-bit KLU.jl match on x86_64
 klu(A; use_fma = Val(false)) # same, fully type-stable
 ```
 
