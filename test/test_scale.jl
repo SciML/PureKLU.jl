@@ -19,8 +19,10 @@ using PureKLU
         @test 2 .* A * (K \ b) ≈ b
     end
     @test PureKLU.klu(A).common.scale == 2
-    @test PureKLU.klu(size(A, 1), A.colptr .- 1, A.rowval .- 1, A.nzval;
-        scale = 0).common.scale == 0
+    @test PureKLU.klu(
+        size(A, 1), A.colptr .- 1, A.rowval .- 1, A.nzval;
+        scale = 0
+    ).common.scale == 0
 end
 
 @testset "scale kwarg: row scaling changes the pivot choice" begin
