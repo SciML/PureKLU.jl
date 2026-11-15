@@ -45,7 +45,8 @@ The full pipeline runs entirely in Julia code; no `ccall`s to SuiteSparse.
 
 ## Bit-for-bit equivalence
 
-`PureKLU.klu(A; use_fma=Val(false))` produces results that are
+On x86_64, `PureKLU.klu(A; use_fma=Val(false), detect_banded=false)`
+produces results that are
 **bit-for-bit identical** to `KLU.jl` for every field (`L`, `U`, `F`,
 `p`, `q`, `R`, `Rs`, solve output, refactor output) across the test
 suite (~1950 cases on real and complex matrices). The pure-Julia
@@ -56,22 +57,26 @@ choices, including:
     Smith);
   - SuiteSparse's `x * sqrt(1 + r²)` complex magnitude (not Julia's
     `hypot`, which is 1 ULP more accurate);
-  - No FMA fusion (`SuiteSparse_jll`'s `libklu.so` ships an SSE2-only
-    baseline build, so its `c -= a*b` is `mulsd` + `subsd`, never
-    `vfnmadd*sd`).
+  - No FMA fusion (`SuiteSparse_jll`'s x86_64 `libklu.so` ships an
+    SSE2-only baseline build, so its `c -= a*b` is `mulsd` + `subsd`,
+    never `vfnmadd*sd`).
+
+On aarch64, `SuiteSparse_jll`'s `libklu` uses fused multiply-add
+instructions (`fmadd`/`fmsub`), so the default `use_fma=Val(true)` is the
+bit-matching mode for real matrices there.
 
 ## FMA fusion toggle
 
 By default (`use_fma=Val(true)`), the kernel multiply-subtract loops
 compute `a - b*c` via `muladd(-b, c, a)`, which LLVM lowers to a fused
-`vfnmadd*sd` on any x86 CPU with FMA. Same numerical result up to one
-ULP at most; faster.
+`vfnmadd*sd` on any x86 CPU with FMA (and `fmsub` on aarch64). Same
+numerical result up to one ULP at most; faster.
 
 ```julia
 klu(A)                     # FMA on (default)
 klu(A; use_fma=true)       # same
 klu(A; use_fma=Val(true))  # same, fully type-stable
-klu(A; use_fma=false)      # SSE2-equivalent, bit-for-bit KLU.jl match
+klu(A; use_fma=false)      # SSE2-equivalent, bit-for-bit KLU.jl match on x86_64
 klu(A; use_fma=Val(false)) # same
 ```
 

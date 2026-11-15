@@ -498,7 +498,9 @@ klu_refactor!(args...; kwargs...) = klu!(args...; kwargs...)
 #
 #   * `use_fma=true` (default) and `use_fma=Val(true)` are equivalent.
 #   * `use_fma=false` and `use_fma=Val(false)` opt out of FMA fusion and
-#     give bit-for-bit results identical to SuiteSparse `KLU.jl`.
+#     give bit-for-bit results identical to SuiteSparse `KLU.jl` where the
+#     `libklu` binary has no FMA instructions (x86_64). On aarch64, `libklu`
+#     uses fused multiply-adds and `use_fma=true` is the bit-matching mode.
 """
     klu(A; check=true, allowsingular=false, full_factor=true) -> K
     klu(n, colptr, rowval, nzval; ...) -> K
@@ -516,8 +518,10 @@ Compute a KLU sparse LU factorization.
   in `F.common.status` and does not throw.
 - `allowsingular = false`: let KLU complete a numerical-singularity factorization.
 - `full_factor = true`: when false, only perform symbolic analysis.
-- `use_fma = true`: use fused multiply-add operations. Pass `false` for
-  bit-for-bit SuiteSparse KLU compatibility.
+- `use_fma = true`: use fused multiply-add operations. The mode that is
+  bit-for-bit compatible with SuiteSparse KLU depends on the platform: `false`
+  on x86_64, where `SuiteSparse_jll`'s `libklu` has no FMA instructions, and
+  `true` on aarch64, where it does.
 - `fully_preallocated = nothing`: select automatic workspace preallocation;
   pass `true` or `false` to override it.
 - `detect_banded = true`: detect narrow BTF blocks and use natural ordering.
@@ -525,6 +529,14 @@ Compute a KLU sparse LU factorization.
   at least `tol` times larger in magnitude. Set `tol = 1.0` for partial pivoting,
   and `tol = 0.0` to always use the diagonal. Only applies to the numeric
   factorization; `klu!` reuses the existing pivot ordering.
+- `scale = 2`: row scaling applied before pivoting and stored in
+  `F.common.scale`. `2` divides each row by its largest absolute entry, `1` by
+  the sum of its absolute entries, `0` disables scaling, and a negative value
+  disables scaling and also skips the numeric factorization's validation of
+  the matrix pattern (such as the check for duplicate entries). When row
+  magnitudes differ by many orders of magnitude, row scaling can change the
+  pivot order and lose accuracy; `scale = 0` may then be preferable. `klu!`
+  uses the same scaling.
 
 # Returns
 - A `KLUFactorization` that implements `LinearAlgebra.Factorization`.
@@ -546,12 +558,13 @@ function klu(
         check::Bool = true, allowsingular::Bool = false,
         full_factor::Bool = true, use_fma = true,
         fully_preallocated::Union{Bool, Nothing} = nothing,
-        detect_banded::Bool = true, tol::Float64 = 0.001,
+        detect_banded::Bool = true, tol::Float64 = 0.001, scale::Integer = 2,
     ) where {Ti <: KLUITypes, Tv <: KLUGenericTypes}
     K = KLUFactorization(n, colptr, rowval, nzval)
     K.common.use_fma = _as_val(use_fma)
     K.common.detect_banded = detect_banded
     K.common.tol = tol
+    K.common.scale = Cint(scale)
     if fully_preallocated isa Bool
         K.common.fully_preallocated = fully_preallocated
         return full_factor ? klu_factor!(K; check, allowsingular) : klu_analyze!(K; check)
@@ -565,14 +578,14 @@ function klu(
         A::SparseMatrixCSC{Tv, Ti}; check::Bool = true,
         allowsingular::Bool = false, full_factor::Bool = true,
         use_fma = true, fully_preallocated::Union{Bool, Nothing} = nothing,
-        detect_banded::Bool = true, tol::Float64 = 0.001,
+        detect_banded::Bool = true, tol::Float64 = 0.001, scale::Integer = 2,
     ) where {Tv <: KLUGenericTypes, Ti <: KLUITypes}
     n = size(A, 1)
     n == size(A, 2) || throw(DimensionMismatch())
     return klu(
         n, decrement(A.colptr), decrement(A.rowval), A.nzval;
         check, allowsingular, full_factor, use_fma, fully_preallocated,
-        detect_banded, tol
+        detect_banded, tol, scale
     )
 end
 
