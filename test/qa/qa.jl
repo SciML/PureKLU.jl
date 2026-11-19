@@ -1,4 +1,4 @@
-using SciMLTesting, PureKLU, Test
+using SciMLTesting, PureKLU, Test, JET
 
 # ExplicitImports only sees an extension module once its trigger package is loaded, so the
 # weakdep has to be loaded here for `PureKLUForwardDiffExt` to be scanned at all.
@@ -17,6 +17,7 @@ const FORWARDDIFF_NONPUBLIC = (:Dual, :Partials, :value, :partials)
 
 run_qa(
     PureKLU;
+    jet_kwargs = (; mode = :basic),
     ei_kwargs = (;
         all_explicit_imports_are_public = (; ignore = FORWARDDIFF_NONPUBLIC),
         all_qualified_accesses_are_public = (; ignore = FORWARDDIFF_NONPUBLIC),
