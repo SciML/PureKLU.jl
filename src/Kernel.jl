@@ -540,7 +540,7 @@ function klu_scale!(
             return false
         end
     end
-    if scale > 0
+    if scale > 0 && Rs !== nothing
         Tr = eltype(Rs)
         z = zero(Tr)
         @inbounds for row in 1:n
@@ -572,7 +572,7 @@ function klu_scale!(
             return false
         end
     end
-    if scale > 0
+    if scale > 0 && Rs !== nothing
         Tr = eltype(Rs)
         zr = zero(Tr); one_r = one(Tr)
         @inbounds for row in 1:n

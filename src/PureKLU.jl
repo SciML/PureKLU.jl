@@ -881,7 +881,7 @@ function _sort_col!(I::Vector, X::Vector, lo::Int, hi::Int)
     return nothing
 end
 
-function _extract_F(K::AbstractKLUFactorization{Tv, Ti}) where {Tv, Ti}
+function _extract_F(K::AbstractKLUFactorization{Tv, Ti}) where {Tv, Ti <: Integer}
     Sym = K.symbolic; Num = K.numeric
     n = Int(Sym.n)
     nzoff = Int(Num.nzoff)
