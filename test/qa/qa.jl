@@ -1,4 +1,4 @@
-using SciMLTesting, PureKLU, Test
+using SciMLTesting, PureKLU, Test, JET
 
 # ExplicitImports only sees an extension module once its trigger package is loaded, so the
 # weakdep has to be loaded here for `PureKLUForwardDiffExt` to be scanned at all.
