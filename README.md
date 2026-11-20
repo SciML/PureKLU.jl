@@ -1,6 +1,13 @@
 # PureKLU.jl
 
-[![Build Status](https://github.com/SciML/PureKLU.jl/workflows/CI/badge.svg)](https://github.com/SciML/PureKLU.jl/actions)
+[![Join the chat at https://julialang.zulipchat.com #sciml-bridged](https://img.shields.io/static/v1?label=Zulip&message=chat&color=9558b2&labelColor=389826)](https://julialang.zulipchat.com/#narrow/stream/279055-sciml-bridged)
+[![Global Docs](https://img.shields.io/badge/docs-SciML-blue.svg)](https://docs.sciml.ai/PureKLU/stable/)
+
+[![codecov](https://codecov.io/gh/SciML/PureKLU.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/SciML/PureKLU.jl)
+[![Build Status](https://github.com/SciML/PureKLU.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/SciML/PureKLU.jl/actions/workflows/CI.yml?query=branch%3Amain)
+
+[![ColPrac: Contributor's Guide on Collaborative Practices for Community Packages](https://img.shields.io/badge/ColPrac-Contributor%27s%20Guide-blueviolet)](https://github.com/SciML/ColPrac)
+[![SciML Code Style](https://img.shields.io/static/v1?label=code%20style&message=SciML&color=9558b2&labelColor=389826)](https://github.com/SciML/SciMLStyle)
 
 A pure-Julia direct port of [SuiteSparse's KLU](https://github.com/DrTimothyAldenDavis/SuiteSparse/tree/dev/KLU) sparse LU
 solver — no SuiteSparse binary dependency. The API mirrors
@@ -13,6 +20,8 @@ A = sparse([1.0 0.0; 1.0 2.0])
 K = klu(A)
 K \ [3.0, 5.0]  # solves A * x = b
 ```
+
+For the full API, see the [documentation](https://docs.sciml.ai/PureKLU/stable/).
 
 ## What's ported
 
