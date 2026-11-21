@@ -4,6 +4,10 @@
 # bit-for-bit, set `common.use_fma = false` (or pass `use_fma=false` to
 # `klu`/`klu_factor!`) -- see `Kernel.jl` for the full discussion.
 
+const _RHS_MIN_COLUMNS = 8
+const _RHS_TILE_WIDTH = 64
+const _RHS_TRANSFER_WIDTH = 16
+
 """
     klu_solve!(Sym, Num, B, common; conj_solve=false) -> B
 
@@ -39,6 +43,24 @@ function _klu_solve_impl!(
     n = Int(Sym.n)
     size(B, 1) == n || throw(DimensionMismatch())
     nrhs = size(B, 2)
+
+    # Keep small, generic and vector solves on the original scalar path.
+    if Tv <: Union{Float32, Float64} && B isa StridedMatrix{Tv} && nrhs >= _RHS_MIN_COLUMNS
+        width = min(_RHS_TILE_WIDTH, nrhs)
+        if size(Num.Xrhs, 2) != n || size(Num.Xrhs, 1) < width
+            Num.Xrhs = Matrix{Tv}(undef, width, n)
+        end
+        for first_column in 1:width:nrhs
+            lanes = min(width, nrhs - first_column + 1)
+            _klu_solve_tile!(Num.Xrhs, B, first_column, lanes, Sym, Num, fma_val)
+        end
+        if was_singular
+            common.status = KLU_SINGULAR
+            common.numerical_rank = sing_rank
+            common.singular_col = sing_col
+        end
+        return B
+    end
 
     Q = Sym.Q
     R = Sym.R
@@ -122,6 +144,119 @@ function _klu_solve_impl!(
         common.singular_col = sing_col
     end
     return B
+end
+
+# RHS lanes are contiguous in X. Sparse coefficients/indices are loaded once
+# per tile, without changing the arithmetic order within any RHS. Transfers use
+# smaller sub-blocks to limit the number of strided B columns touched at once.
+@inline function _submul_lanes!(X, target, source, coefficient, lanes, fma_val::Val)
+    @inbounds @simd for lane in 1:lanes
+        X[lane, target] = _mulsub(X[lane, target], coefficient, X[lane, source], fma_val)
+    end
+    return nothing
+end
+
+@inline function _divide_lanes!(X, row, diagonal, lanes, fma_val::Val)
+    @inbounds @simd for lane in 1:lanes
+        X[lane, row] = _cdiv(X[lane, row], diagonal, fma_val)
+    end
+    return nothing
+end
+
+function _klu_solve_tile!(
+        X::Matrix{Tv}, B::AbstractMatrix{Tv}, first_column::Int, lanes::Int,
+        Sym, Num, fma_val::Val
+    ) where {Tv}
+    n = Int(Sym.n)
+    nblocks = Int(Sym.nblocks)
+    Pnum, Q = Num.Pnum, Sym.Q
+    R = Sym.R
+    Lip, Llen = Num.Lip, Num.Llen
+    Uip, Ulen = Num.Uip, Num.Ulen
+    Udiag = Num.Udiag
+    Rs = Num.Rs
+    Offp, Offi, Offx = Num.Offp, Num.Offi, Num.Offx
+    scaled = !isempty(Rs)
+
+    @inbounds begin
+        # X = P * (R \ B), with Pnum zero-based as in the upstream kernel.
+        for first_lane in 1:_RHS_TRANSFER_WIDTH:lanes, k in 0:(n - 1)
+            source_row = Int(Pnum[k + 1]) + 1
+            @simd for lane in first_lane:min(first_lane + _RHS_TRANSFER_WIDTH - 1, lanes)
+                X[lane, k + 1] = B[source_row, first_column + lane - 1]
+            end
+        end
+        if scaled
+            for k in 1:n
+                scale = Rs[k]
+                @simd for lane in 1:lanes
+                    X[lane, k] = X[lane, k] / scale
+                end
+            end
+        end
+
+        # Preserve PureKLU's BTF order, block boundaries, pivoted L/U factors, and
+        # off-diagonal block scatter.  Only the RHS lane is moved to the innermost
+        # loop; arithmetic and traversal order within each lane are unchanged.
+        for block in nblocks:-1:1
+            k1 = Int(R[block])
+            k2 = Int(R[block + 1])
+            nk = k2 - k1
+            block_num = Num.LUbx[block]
+            if nk == 1
+                _divide_lanes!(X, k1 + 1, Udiag[k1 + 1], lanes, fma_val)
+            else
+                for local_k in 0:(nk - 1)
+                    row = k1 + local_k + 1
+                    lip = Int(Lip[row])
+                    len = Int(Llen[row])
+                    if len > 0
+                        for p in 0:(len - 1)
+                            index = lip + p + 1
+                            target = k1 + Int(block_num.Li[index]) + 1
+                            _submul_lanes!(X, target, row, block_num.Lx[index], lanes, fma_val)
+                        end
+                    end
+                end
+                for local_k in (nk - 1):-1:0
+                    row = k1 + local_k + 1
+                    _divide_lanes!(X, row, Udiag[row], lanes, fma_val)
+                    uip = Int(Uip[row])
+                    len = Int(Ulen[row])
+                    if len > 0
+                        for p in 0:(len - 1)
+                            index = uip + p + 1
+                            target = k1 + Int(block_num.Ui[index]) + 1
+                            _submul_lanes!(X, target, row, block_num.Ux[index], lanes, fma_val)
+                        end
+                    end
+                end
+            end
+            if block > 1
+                for k in k1:(k2 - 1)
+                    pstart = Int(Offp[k + 1])
+                    pend = Int(Offp[k + 2]) - 1
+                    if pstart <= pend
+                        for p in pstart:pend
+                            index = p + 1
+                            target = Int(Offi[index]) + 1
+                            _submul_lanes!(X, target, k + 1, Offx[index], lanes, fma_val)
+                        end
+                    end
+                end
+            end
+        end
+
+        # Scatter X = Q*x back into the caller's RHS.  The lane loop remains
+        # contiguous in X even when B has a larger column stride.
+        for first_lane in 1:_RHS_TRANSFER_WIDTH:lanes, k in 0:(n - 1)
+            destination_row = Int(Q[k + 1]) + 1
+            @simd for lane in first_lane:min(first_lane + _RHS_TRANSFER_WIDTH - 1, lanes)
+                B[destination_row, first_column + lane - 1] = X[lane, k + 1]
+            end
+        end
+    end
+    return nothing
 end
 
 function _klu_lsolve!(
